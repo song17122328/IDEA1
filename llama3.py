@@ -37,9 +37,16 @@ def main(args):
     )
 
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+
+    print(f"默认设备{args.device}")
+    if args.device == "cuda":
+        from get_best_gpu import get_best_gpu
+        args.device = "cuda:"+ str(get_best_gpu())
+    print(f"最优设备为:{args.device}")
+
     model = LlamaForCausalLM.from_pretrained(
         args.base_model,
-        device_map="auto",
+        device_map=args.device,
         torch_dtype=torch.float16,
     )
     if args.device != "cpu":
@@ -68,7 +75,9 @@ def main(args):
         ppl = PPLMetric(model, tokenizer, ['wikitext2', 'ptb'], args.max_seq_len, device=args.eval_device)
         logger.log("PPL before pruning: {}".format(ppl))
 
-    model.to(args.device)
+
+    # model.to(args.device)
+
 
     pruner_type = args.pruner_type.lower()
     assert pruner_type in ['random', 'l2', 'l1', 'taylor']
