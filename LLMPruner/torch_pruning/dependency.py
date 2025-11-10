@@ -692,8 +692,10 @@ class DependencyGraph(object):
 
         module2node = {}
         for o in utils.flatten_as_list(out):
-            self._trace_computational_graph(
-                module2node, o.grad_fn, gradfn2module, reused)
+            # Only process tensor outputs, skip non-tensor elements
+            if isinstance(o, torch.Tensor):
+                self._trace_computational_graph(
+                    module2node, o.grad_fn, gradfn2module, reused)
 
         # TODO: Improving ViT pruning
         # This is a corner case for pruning ViT,
