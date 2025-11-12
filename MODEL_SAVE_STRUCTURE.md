@@ -79,7 +79,8 @@ file_size_mb = os.path.getsize(pruned_path) / (1024 * 1024)
 print(f"剪枝后模型文件大小: {file_size_mb:.2f} MB")
 
 # 加载模型并检查参数数量
-checkpoint = torch.load(pruned_path, map_location='cpu')
+# 注意：PyTorch 2.6+ 需要 weights_only=False 来加载包含自定义类的模型
+checkpoint = torch.load(pruned_path, map_location='cpu', weights_only=False)
 model = checkpoint['model']
 
 total_params = sum(p.numel() for p in model.parameters())
@@ -122,8 +123,10 @@ import torch
 from transformers import AutoTokenizer
 
 # 加载剪枝后的模型
+# 注意：PyTorch 2.6+ 需要 weights_only=False 来加载包含自定义类的模型
 checkpoint = torch.load('prune_log/llama_prune/pytorch_model.bin',
-                       map_location='cuda:0')
+                       map_location='cuda:0',
+                       weights_only=False)
 
 model = checkpoint['model']
 tokenizer = checkpoint['tokenizer']
@@ -164,9 +167,38 @@ print(tokenizer.decode(output[0]))
    cp prune_log/llama_prune/pytorch_model.bin ./llama3_pruned_25pct.bin
    ```
 
+## PyTorch 版本兼容性说明
+
+### PyTorch 2.6+ 的 weights_only 参数
+
+从 PyTorch 2.6 开始，`torch.load()` 默认启用了 `weights_only=True` 安全模式，这会导致加载包含自定义类（如 transformers 模型）的 checkpoint 时失败。
+
+**错误信息示例：**
+```
+WeightsUnpickler error: Unsupported global: GLOBAL transformers.models.llama.modeling_llama.LlamaForCausalLM
+```
+
+**解决方法：**
+
+在所有 `torch.load()` 调用中添加 `weights_only=False` 参数：
+
+```python
+# 正确的加载方式
+checkpoint = torch.load('model.bin', map_location='cpu', weights_only=False)
+
+# 错误的加载方式（PyTorch 2.6+ 会失败）
+checkpoint = torch.load('model.bin', map_location='cpu')
+```
+
+**安全性说明：**
+- 只从可信来源加载模型文件时使用 `weights_only=False`
+- 我们的剪枝模型是自己生成的，因此是安全的
+- 如果从互联网下载未知模型，请谨慎使用此选项
+
 ## 注意事项
 
 - `pytorch_model.bin` 会在每次运行时被覆盖
 - 如果需要保留多个版本，请在运行后立即备份
 - 时间戳子目录会一直保留，不会被覆盖
 - 建议定期清理旧的时间戳目录以节省空间
+- 使用 PyTorch 2.6+ 时，加载模型需要 `weights_only=False` 参数

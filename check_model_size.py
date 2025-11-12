@@ -30,7 +30,8 @@ def get_model_params(model_path):
     """加载模型并统计参数数量"""
     try:
         print(f"正在加载模型: {model_path}")
-        checkpoint = torch.load(model_path, map_location='cpu')
+        # PyTorch 2.6+ requires weights_only=False for loading models with custom classes
+        checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
 
         if 'model' in checkpoint:
             model = checkpoint['model']
