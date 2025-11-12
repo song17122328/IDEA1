@@ -320,12 +320,12 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 只为实际参与剪枝的层配置 channel_groups 和 consecutive_groups
-    # 这避免了 MetaPruner 处理未参与剪枝的层时出错
+    # 为所有层配置 channel_groups 和 consecutive_groups
+    # 这是必需的，因为依赖图传播会影响到所有层
+    # 即使某些层不在 root_instances 中，也需要配置
     channel_groups = {}
     consecutive_groups = {}
-    for layer_idx in actual_pruning_layers:
-        layer = model.model.layers[layer_idx]
+    for layer in model.model.layers:  # 所有层 0-31
         # q_proj 按 (gqa_ratio * head_dim) 通道一组
         # 512通道 = 4个Q heads × 128
         channel_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512
@@ -333,22 +333,22 @@ def main():
         consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128
 
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"channel_groups 和 consecutive_groups 仅应用于实际剪枝的层: {actual_pruning_layers}")
+    logger.log(f"channel_groups 和 consecutive_groups 应用于所有层 (依赖图传播需要)")
 
     kwargs = {
         "importance": imp,
         "global_pruning": False,
         "iterative_steps": args.iterative_steps,
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
-        "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
+        "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率（只包含层 2-31）
         "ignored_layers": [],
-        "channel_groups": channel_groups,  # ⭐ 只包含实际剪枝层的 q_proj
-        "consecutive_groups": consecutive_groups,  # ⭐ 只包含实际剪枝层的 k_proj
+        "channel_groups": channel_groups,  # ⭐ 所有层的 q_proj
+        "consecutive_groups": consecutive_groups,  # ⭐ 所有层的 k_proj
         "customized_pruners": {
             LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
         },
         "root_module_types": None,
-        "root_instances": root_instances  # ⭐ 只包含实际参与剪枝的层
+        "root_instances": root_instances  # ⭐ 只包含实际参与剪枝的层 2-31
     }
 
     logger.log(f"实际剪枝 Attention 和 MLP 的层: {actual_pruning_layers}")
