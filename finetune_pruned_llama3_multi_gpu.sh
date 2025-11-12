@@ -42,7 +42,7 @@ CUDA_VISIBLE_DEVICES=$GPU_IDS torchrun \
     --val_set_size 2000 \
     --lora_r 8 \
     --lora_alpha 16 \
-    --lora_target_modules q_proj,k_proj,v_proj,o_proj,gate_proj,down_proj,up_proj \
+    --lora_target_modules gate_proj,down_proj,up_proj \
     --extra_val_dataset wikitext2 \
     --cache_dataset
 
