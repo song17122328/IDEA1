@@ -22,11 +22,12 @@ def get_c4(tokenizer, n_samples, seq_len):
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
     return torch.cat(tokenized_samples, dim=0)
 
-def get_bookcorpus(tokenizer, n_samples, seq_len):
+def get_wikitext(tokenizer, n_samples, seq_len):
+    """Load wikitext-2-raw-v1 dataset as a replacement for bookcorpus"""
     traindata = load_dataset(
-        'bookcorpus', split='train'
+        'wikitext', 'wikitext-2-raw-v1', split='train'
     )
-    
+
     tokenized_samples, history = [], []
     for _ in range(n_samples):
         while True:
@@ -39,9 +40,16 @@ def get_bookcorpus(tokenizer, n_samples, seq_len):
         tokenized_samples.append(tokenized_sample.input_ids[:, i:i+seq_len])
     return torch.cat(tokenized_samples, dim=0 )
 
+def get_bookcorpus(tokenizer, n_samples, seq_len):
+    """Deprecated: bookcorpus is no longer available. Use wikitext instead."""
+    print("Warning: bookcorpus is no longer available. Using wikitext instead.")
+    return get_wikitext(tokenizer, n_samples, seq_len)
+
 def get_examples(dataset, tokenizer, n_samples, seq_len = 128):
     if dataset == 'c4':
         return get_c4(tokenizer, n_samples, seq_len)
+    elif dataset == 'wikitext':
+        return get_wikitext(tokenizer, n_samples, seq_len)
     elif dataset == 'bookcorpus':
         return get_bookcorpus(tokenizer, n_samples, seq_len)
     else:
