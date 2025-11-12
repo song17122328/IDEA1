@@ -58,8 +58,25 @@ class LayerImportanceAnalyzer:
             # 定义恒等映射函数
             def identity_forward(hidden_states, *args, **kwargs):
                 # 直接返回输入的hidden_states，跳过该层的计算
-                return (hidden_states,) + (None,) * (len(kwargs.get('output_attentions', (None,))) +
-                                                      len(kwargs.get('output_hidden_states', (None,))))
+                # Llama 的 DecoderLayer forward 返回格式：
+                # - 如果不返回额外信息：hidden_states
+                # - 如果返回注意力权重：(hidden_states, self_attn_weights, present_key_value)
+
+                # 检查是否需要返回额外信息
+                output_attentions = kwargs.get('output_attentions', False)
+                use_cache = kwargs.get('use_cache', False)
+
+                if output_attentions or use_cache:
+                    # 返回元组格式
+                    outputs = (hidden_states,)
+                    if output_attentions:
+                        outputs += (None,)  # self_attn_weights
+                    if use_cache:
+                        outputs += (None,)  # present_key_value
+                    return outputs
+                else:
+                    # 只返回 hidden_states
+                    return hidden_states
 
             # 临时替换该层的forward
             self.model.model.layers[layer_idx].forward = identity_forward
