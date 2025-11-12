@@ -30,7 +30,8 @@ def main(args):
     os.environ["WANDB_PROJECT"] = args.wandb_project
 
     # Load Pruned Model
-    pruned_dict = torch.load(args.prune_model, map_location='cpu')
+    # PyTorch 2.6+ requires weights_only=False for models with custom classes
+    pruned_dict = torch.load(args.prune_model, map_location='cpu', weights_only=False)
     tokenizer, model = pruned_dict['tokenizer'], pruned_dict['model']
 
     gradient_accumulation_steps = args.batch_size // args.micro_batch_size
@@ -213,7 +214,28 @@ def main(args):
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     model.state_dict = old_state_dict
+
+    # Save LoRA adapter
     model.save_pretrained(args.output_dir)
+
+    # Merge LoRA weights and save full model for evaluation
+    print("\n" + "="*80)
+    print("合并 LoRA 权重并保存完整模型...")
+    print("="*80)
+
+    # Get base model and merge LoRA weights
+    from peft import PeftModel
+    base_model = model.merge_and_unload()
+
+    # Save full model in the format expected by evaluation scripts
+    full_model_path = os.path.join(args.output_dir, 'pytorch_model.bin')
+    torch.save({
+        'model': base_model,
+        'tokenizer': tokenizer
+    }, full_model_path)
+
+    print(f"✅ 完整模型已保存到: {full_model_path}")
+    print("="*80)
 
 
 if __name__ == "__main__":
