@@ -10,7 +10,6 @@ from typing import List, Dict
 from tqdm import tqdm
 import json
 import matplotlib.pyplot as plt
-import seaborn as sns
 
 
 class LayerImportanceAnalyzer:

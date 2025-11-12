@@ -1,5 +1,15 @@
 # 非均衡结构化剪枝指南
 
+## 依赖要求
+
+确保已安装以下 Python 包：
+
+```bash
+pip install torch transformers datasets tqdm matplotlib numpy
+```
+
+**注意**：不需要 seaborn，只使用 matplotlib 进行可视化。
+
 ## 概述
 
 本指南介绍如何使用**非均衡结构化剪枝**，结合**层重要度评估**和**结构化剪枝**的优势：
