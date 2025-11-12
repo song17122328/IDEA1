@@ -28,7 +28,7 @@ CUDA_VISIBLE_DEVICES=$GPU_ID python post_training.py \
     --prune_model "$PRUNE_MODEL" \
     --data_path yahma/alpaca-cleaned \
     --output_dir "$OUTPUT_DIR" \
-    --wandb_project llama3-pruned-finetune \
+    --disable_wandb \
     --num_epochs 3 \
     --learning_rate 3e-4 \
     --batch_size 128 \

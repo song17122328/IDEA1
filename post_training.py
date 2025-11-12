@@ -195,7 +195,7 @@ def main(args):
             load_best_model_at_end=True,
             ddp_find_unused_parameters=None,
             group_by_length=args.group_by_length,
-            report_to="wandb",
+            report_to="none" if args.disable_wandb else "wandb",  # 支持禁用 WandB
             run_name=args.output_dir.split('/')[-1],
             metric_for_best_model="{}_loss".format(args.data_path),
         ),
@@ -272,6 +272,7 @@ if __name__ == "__main__":
    
     # wandb params
     parser.add_argument('--wandb_project', type=str, default="")
+    parser.add_argument('--disable_wandb', action='store_true', default=False, help='Disable WandB logging')
     parser.add_argument('--resume_from_checkpoint', type=str, help="either training checkpoint or final adapter")
 
     #ddp
