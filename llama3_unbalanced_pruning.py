@@ -306,9 +306,13 @@ def main():
     # 配置剪枝参数
     # channel_groups: 确保 q_proj 和 k_proj 按 GQA 比例剪枝
     channel_groups = {}
+    num_heads = model.config.num_attention_heads  # 32
+    num_key_value_heads = model.config.num_key_value_heads  # 8
+    gqa_ratio = num_heads // num_key_value_heads  # 4
+
     for layer in model.model.layers:
-        # 将 q_proj 和 k_proj 分组，确保 q_heads : kv_heads = 4:1
-        channel_groups[layer.self_attn.q_proj] = layer.self_attn.num_heads // layer.self_attn.num_key_value_heads
+        # 将 q_proj 分组，确保 q_heads : kv_heads = 4:1
+        channel_groups[layer.self_attn.q_proj] = gqa_ratio
 
     kwargs = {
         "importance": imp,
