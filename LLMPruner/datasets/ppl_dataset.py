@@ -22,8 +22,8 @@ def get_ptb(seq_len, tokenizer):
         traindata = load_dataset('ptb_text_only', split='train')
         valdata = load_dataset('ptb_text_only', split='validation')
     except Exception as e:
-        print(f"Warning: Could not load PTB dataset with default method: {e}")
-        print("Falling back to wikitext-2 for evaluation...")
+        print(f"警告：无法加载 PTB 数据集 ({e})")
+        print("已自动切换到 wikitext-2-raw-v1 数据集进行评估")
         # Fallback to wikitext2 if PTB fails
         traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
         valdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='validation')
@@ -52,17 +52,22 @@ def process_data(samples, tokenizer, seq_len, field_name):
        
 
 def get_loaders(name, tokenizer, seq_len=2048, batch_size = 8):
+    actual_dataset_name = name  # Track actual dataset used
+
     if 'wikitext2' in name:
         train_data, test_data = get_wikitext2(seq_len, tokenizer)
         test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
+        actual_dataset_name = 'wikitext2 (wikitext-2-raw-v1)'
     if 'ptb' in name:
         train_data, test_data = get_ptb(seq_len, tokenizer)
         # Try 'sentence' field first (PTB format), fall back to 'text' (wikitext format)
         try:
             test_dataset = process_data(test_data, tokenizer, seq_len, 'sentence')
+            actual_dataset_name = 'ptb (ptb_text_only)'
         except (KeyError, ValueError):
             # ValueError is raised when column doesn't exist in newer datasets library
             test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
+            actual_dataset_name = 'ptb (实际使用: wikitext-2-raw-v1)'
 
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    return train_data, test_loader
+    return train_data, test_loader, actual_dataset_name

@@ -42,7 +42,7 @@ def get_wikitext(tokenizer, n_samples, seq_len):
 
 def get_bookcorpus(tokenizer, n_samples, seq_len):
     """Deprecated: bookcorpus is no longer available. Use wikitext instead."""
-    print("Warning: bookcorpus is no longer available. Using wikitext instead.")
+    print("警告：bookcorpus 数据集不可用，已自动切换到 wikitext-2-raw-v1 数据集")
     return get_wikitext(tokenizer, n_samples, seq_len)
 
 def get_examples(dataset, tokenizer, n_samples, seq_len = 128):

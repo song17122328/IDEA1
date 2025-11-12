@@ -7,9 +7,9 @@ from LLMPruner.datasets.ppl_dataset import get_loaders
 def PPLMetric(model, tokenizer, datasets, seq_len=128, batch_size = 4, device="cuda"):
     metric = {}
     for dataset in datasets:
-        _, test_loader = get_loaders(dataset, tokenizer, seq_len=seq_len, batch_size = batch_size)
+        _, test_loader, actual_name = get_loaders(dataset, tokenizer, seq_len=seq_len, batch_size = batch_size)
         ppl = llama_eval(model, test_loader, device)
-        metric[dataset] = ppl
+        metric[actual_name] = ppl
         print(metric)
     return metric
 
