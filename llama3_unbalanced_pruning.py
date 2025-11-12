@@ -161,7 +161,7 @@ def main():
             layer_importance = analyzer.measure_layer_importance_by_activation(eval_texts)
 
         # 显示重要性结果
-        logger.log("\n层重要性评分:")
+        logger.log("\n层重要性评分(移除该层后的PPL增加):")
         for layer_idx, importance in sorted(layer_importance.items()):
             logger.log(f"  Layer {layer_idx}: {importance:.6f}")
 

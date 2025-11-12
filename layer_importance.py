@@ -182,7 +182,9 @@ class UnbalancedStructuredPruningCalculator:
             log_importance = np.log(shifted_importance)
             importance_values = log_importance
 
-        print(f"使用对数变化处理重要度后为:{importance_values}")
+        print("\n对数处理后的层重要性评分:")
+        for layer_idx in range(len(importance_values)):
+            print(f"  Layer {layer_idx}: {importance_values[layer_idx]:.6f}")
         if strategy == 'inverse':
             # 重要性高 -> 剪枝率低
             # 归一化到 [0, 1]
