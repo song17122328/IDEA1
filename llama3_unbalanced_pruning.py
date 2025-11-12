@@ -308,11 +308,10 @@ def main():
     logger.log(f"使用 {args.pruner_type} 剪枝器...")
 
     # 只为实际参与剪枝的层创建 root_instances
-    # 包含 q_proj 和 k_proj 以确保 GQA 比例约束生效
+    # 只包含 k_proj（不包含 q_proj），让依赖图传播到 q_proj
     root_instances = []
     for layer_idx in actual_pruning_layers:
-        root_instances.append(model.model.layers[layer_idx].self_attn.q_proj)  # Q projections
-        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # KV projections
+        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # KV projections (root)
         root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
 
     # 获取 GQA 配置
@@ -321,17 +320,17 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 配置 consecutive_groups 用于维持 GQA 比例
-    # q_proj 按 (gqa_ratio * head_dim) 通道一组，确保每次剪 4 个 Q heads
-    # k_proj 按 head_dim 通道一组，确保每次剪 1 个 KV head
-    # 这样可以维持 4:1 的 GQA 比例
+    # 配置 channel_groups 和 consecutive_groups 用于维持 GQA 比例
+    # channel_groups: 强制 q_proj 按 512 通道分组（4 个 Q heads）
+    # consecutive_groups: 强制 k_proj 按 128 通道分组（1 个 KV head）
+    channel_groups = {}
     consecutive_groups = {}
     for layer in model.model.layers:  # 所有层 0-31
-        consecutive_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512 (4 个 Q heads)
+        channel_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512 (4 个 Q heads)
         consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128 (1 个 KV head)
 
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"consecutive_groups: q_proj 按 {gqa_ratio * head_dim} 通道一组, k_proj 按 {head_dim} 通道一组")
+    logger.log(f"channel_groups[q_proj]={gqa_ratio * head_dim}, consecutive_groups[k_proj]={head_dim}")
 
     kwargs = {
         "importance": imp,
@@ -340,17 +339,17 @@ def main():
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率（只包含层 2-31）
         "ignored_layers": [],
-        "channel_groups": {},  # ⭐ 空字典，与原始 llama3.py 一致
-        "consecutive_groups": consecutive_groups,  # ⭐ 所有层的 k_proj
+        "channel_groups": channel_groups,  # ⭐ 强制 q_proj 按 512 通道分组
+        "consecutive_groups": consecutive_groups,  # ⭐ 强制 k_proj 按 128 通道分组
         "customized_pruners": {
             LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
         },
         "root_module_types": None,
-        "root_instances": root_instances  # ⭐ 只包含实际参与剪枝的层 2-31
+        "root_instances": root_instances  # ⭐ 只包含 k_proj 和 gate_proj
     }
 
     logger.log(f"实际剪枝 Attention 和 MLP 的层: {actual_pruning_layers}")
-    logger.log(f"root_instances 数量: {len(root_instances)} (每层3个模块: q_proj + k_proj + gate_proj)")
+    logger.log(f"root_instances 数量: {len(root_instances)} (每层2个模块: k_proj + gate_proj)")
 
     # 创建剪枝器
     pruner = tp.pruner.MetaPruner(model, forward_prompts, **kwargs)

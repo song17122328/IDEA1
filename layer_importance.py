@@ -316,9 +316,8 @@ def create_ch_sparsity_dict_for_llama(model, layer_pruning_rates: Dict[int, floa
 
         # Attention 模块
         if prune_attention and hasattr(layer, 'self_attn'):
-            # 为 q_proj 和 k_proj 都设置剪枝率
-            # 这确保 consecutive_groups 约束对两者都生效，维持 GQA 比例
-            ch_sparsity_dict[layer.self_attn.q_proj] = pruning_rate
+            # 只为 k_proj 设置剪枝率（作为 root module）
+            # q_proj 通过依赖图传播自动剪枝，channel_groups 确保其按 512 通道分组
             ch_sparsity_dict[layer.self_attn.k_proj] = pruning_rate
 
         # MLP 模块
