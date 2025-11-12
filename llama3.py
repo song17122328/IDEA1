@@ -42,7 +42,11 @@ def main(args):
     if args.device == "cuda":
         from get_best_gpu import get_best_gpu
         args.device = "cuda:"+ str(get_best_gpu())
+        # Set eval_device to the same GPU if it's still the default "cuda"
+        if args.eval_device == "cuda":
+            args.eval_device = args.device
     print(f"最优设备为:{args.device}")
+    print(f"评估设备为:{args.eval_device}")
 
     model = LlamaForCausalLM.from_pretrained(
         args.base_model,
