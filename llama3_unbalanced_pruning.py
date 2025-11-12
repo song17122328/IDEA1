@@ -7,6 +7,7 @@ Llama-3 非均衡结构化剪枝脚本
 import os
 import gc
 import sys
+import json
 import torch
 import argparse
 import numpy as np
@@ -222,19 +223,51 @@ def main():
     pruning_layers = set(range(args.block_attention_layer_start, args.block_attention_layer_end)) | \
                     set(range(args.block_mlp_layer_start, args.block_mlp_layer_end))
 
+    # 过滤：只保留在剪枝范围内的层
     filtered_pruning_rates = {
         idx: rate for idx, rate in layer_pruning_rates.items()
         if idx in pruning_layers
     }
 
+    # 进一步过滤：移除剪枝率太低的层（避免剪枝0个通道导致错误）
+    min_effective_rate = 0.01  # 最小有效剪枝率：1%
+    effective_pruning_rates = {
+        idx: rate for idx, rate in filtered_pruning_rates.items()
+        if rate >= min_effective_rate
+    }
+
+    # 记录被过滤掉的层
+    skipped_layers = set(filtered_pruning_rates.keys()) - set(effective_pruning_rates.keys())
+    if skipped_layers:
+        logger.log(f"警告：以下层的剪枝率 < {min_effective_rate:.2%}，已跳过：{sorted(skipped_layers)}")
+        for idx in sorted(skipped_layers):
+            logger.log(f"  Layer {idx}: {filtered_pruning_rates[idx]:.4f}")
+
     ch_sparsity_dict = create_ch_sparsity_dict_for_llama(
         model,
-        filtered_pruning_rates,
+        effective_pruning_rates,
         prune_attention=True,
         prune_mlp=True
     )
 
     logger.log(f"为 {len(ch_sparsity_dict)} 个模块设置了自定义剪枝率")
+
+    # 保存 ch_sparsity_dict 到文件（转换为可读格式）
+    ch_sparsity_readable = {}
+    for module, rate in ch_sparsity_dict.items():
+        # 获取模块的完整名称
+        module_name = None
+        for name, m in model.named_modules():
+            if m is module:
+                module_name = name
+                break
+        if module_name:
+            ch_sparsity_readable[module_name] = float(rate)
+
+    ch_sparsity_path = os.path.join(logger.log_dir, 'ch_sparsity_dict.json')
+    with open(ch_sparsity_path, 'w') as f:
+        json.dump(ch_sparsity_readable, f, indent=2, ensure_ascii=False)
+    logger.log(f"ch_sparsity_dict 已保存到: {ch_sparsity_path}")
 
     # ==================== 步骤4: 执行结构化剪枝 ====================
     logger.log("=" * 80)
