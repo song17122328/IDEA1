@@ -60,7 +60,8 @@ def get_loaders(name, tokenizer, seq_len=2048, batch_size = 8):
         # Try 'sentence' field first (PTB format), fall back to 'text' (wikitext format)
         try:
             test_dataset = process_data(test_data, tokenizer, seq_len, 'sentence')
-        except KeyError:
+        except (KeyError, ValueError):
+            # ValueError is raised when column doesn't exist in newer datasets library
             test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
 
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
