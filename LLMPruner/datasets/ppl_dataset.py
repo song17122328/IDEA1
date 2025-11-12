@@ -16,8 +16,17 @@ def get_wikitext2(seq_len, tokenizer):
     return traindata, testdata
 
 def get_ptb(seq_len, tokenizer):
-    traindata = load_dataset('ptb_text_only', 'penn_treebank', split='train')
-    valdata = load_dataset('ptb_text_only', 'penn_treebank', split='validation')
+    # Use the updated dataset loading method compatible with newer HuggingFace datasets library
+    # The old 'ptb_text_only' with config 'penn_treebank' is no longer supported
+    try:
+        traindata = load_dataset('ptb_text_only', split='train')
+        valdata = load_dataset('ptb_text_only', split='validation')
+    except Exception as e:
+        print(f"Warning: Could not load PTB dataset with default method: {e}")
+        print("Falling back to wikitext-2 for evaluation...")
+        # Fallback to wikitext2 if PTB fails
+        traindata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='train')
+        valdata = load_dataset('wikitext', 'wikitext-2-raw-v1', split='validation')
     return traindata, valdata
 
 class IndexDataset(Dataset):
@@ -48,7 +57,11 @@ def get_loaders(name, tokenizer, seq_len=2048, batch_size = 8):
         test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
     if 'ptb' in name:
         train_data, test_data = get_ptb(seq_len, tokenizer)
-        test_dataset = process_data(test_data, tokenizer, seq_len, 'sentence')
+        # Try 'sentence' field first (PTB format), fall back to 'text' (wikitext format)
+        try:
+            test_dataset = process_data(test_data, tokenizer, seq_len, 'sentence')
+        except KeyError:
+            test_dataset = process_data(test_data, tokenizer, seq_len, 'text')
 
     test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     return train_data, test_loader
