@@ -304,6 +304,12 @@ def main():
     logger.log(f"使用 {args.pruner_type} 剪枝器...")
 
     # 配置剪枝参数
+    # channel_groups: 确保 q_proj 和 k_proj 按 GQA 比例剪枝
+    channel_groups = {}
+    for layer in model.model.layers:
+        # 将 q_proj 和 k_proj 分组，确保 q_heads : kv_heads = 4:1
+        channel_groups[layer.self_attn.q_proj] = layer.self_attn.num_heads // layer.self_attn.num_key_value_heads
+
     kwargs = {
         "importance": imp,
         "global_pruning": False,
@@ -311,7 +317,7 @@ def main():
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
         "ignored_layers": [],
-        "channel_groups": {},
+        "channel_groups": channel_groups,  # GQA 比例约束
         "consecutive_groups": {
             layer.self_attn.k_proj: layer.self_attn.head_dim for layer in model.model.layers
         },
@@ -349,9 +355,23 @@ def main():
         logger.log(f"迭代 {i+1}/{args.iterative_steps} 后参数量: {after_pruning_parameters:,}")
 
         # 更新推理相关属性
-        for layer in model.model.layers:
-            layer.self_attn.num_heads = layer.self_attn.q_proj.weight.data.shape[0] // layer.self_attn.head_dim
-            layer.self_attn.num_key_value_heads = layer.self_attn.k_proj.weight.data.shape[0] // layer.self_attn.head_dim
+        for layer_idx, layer in enumerate(model.model.layers):
+            q_out_channels = layer.self_attn.q_proj.weight.data.shape[0]
+            k_out_channels = layer.self_attn.k_proj.weight.data.shape[0]
+            head_dim = layer.self_attn.head_dim
+
+            # 验证通道数是 head_dim 的倍数
+            assert q_out_channels % head_dim == 0, f"Layer {layer_idx}: q_proj 输出通道 {q_out_channels} 不是 head_dim {head_dim} 的倍数"
+            assert k_out_channels % head_dim == 0, f"Layer {layer_idx}: k_proj 输出通道 {k_out_channels} 不是 head_dim {head_dim} 的倍数"
+
+            num_heads = q_out_channels // head_dim
+            num_kv_heads = k_out_channels // head_dim
+
+            # 验证 num_heads 能被 num_kv_heads 整除（GQA 约束）
+            assert num_heads % num_kv_heads == 0, f"Layer {layer_idx}: num_heads {num_heads} 不能被 num_kv_heads {num_kv_heads} 整除"
+
+            layer.self_attn.num_heads = num_heads
+            layer.self_attn.num_key_value_heads = num_kv_heads
 
     # 清理梯度
     model.zero_grad()
@@ -369,6 +389,11 @@ def main():
     logger.log(f"剪枝后参数量: {final_parameters:,}")
     logger.log(f"参数减少量: {before_pruning_parameters - final_parameters:,}")
     logger.log(f"实际剪枝率: {(1 - final_parameters/before_pruning_parameters)*100:.2f}%")
+
+    # 验证和打印每层的 head 数量
+    logger.log("\n每层的 attention heads 配置:")
+    for idx, layer in enumerate(model.model.layers):
+        logger.log(f"  Layer {idx}: q_heads={layer.self_attn.num_heads}, kv_heads={layer.self_attn.num_key_value_heads}, ratio={layer.self_attn.num_heads/layer.self_attn.num_key_value_heads:.1f}:1")
 
     # ==================== 步骤5: 保存模型 ====================
     if args.save_model:
@@ -391,6 +416,11 @@ def main():
         logger.log("=" * 80)
         logger.log("步骤6: 评估困惑度")
         logger.log("=" * 80)
+
+        # 在评估前再次更新 head 配置（确保正确）
+        for layer in model.model.layers:
+            layer.self_attn.num_heads = layer.self_attn.q_proj.weight.data.shape[0] // layer.self_attn.head_dim
+            layer.self_attn.num_key_value_heads = layer.self_attn.k_proj.weight.data.shape[0] // layer.self_attn.head_dim
 
         model.to(args.device)
         model.eval()
