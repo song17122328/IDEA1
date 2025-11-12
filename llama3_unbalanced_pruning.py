@@ -320,16 +320,20 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 配置 channel_groups 来强制 q_proj 和 k_proj 保持 GQA 比例
-    # 这确保了当 k_proj 剪枝 1 个 KV head (128通道) 时，q_proj 剪枝 4 个 Q heads (512通道)
+    # 只为实际参与剪枝的层配置 channel_groups 和 consecutive_groups
+    # 这避免了 MetaPruner 处理未参与剪枝的层时出错
     channel_groups = {}
-    for layer in model.model.layers:
+    consecutive_groups = {}
+    for layer_idx in actual_pruning_layers:
+        layer = model.model.layers[layer_idx]
         # q_proj 按 (gqa_ratio * head_dim) 通道一组
         # 512通道 = 4个Q heads × 128
         channel_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512
+        # k_proj 按 head_dim 通道一组
+        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128
 
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"channel_groups: q_proj 按 {gqa_ratio * head_dim} 通道一组（{gqa_ratio} 个 Q heads）")
+    logger.log(f"channel_groups 和 consecutive_groups 仅应用于实际剪枝的层: {actual_pruning_layers}")
 
     kwargs = {
         "importance": imp,
@@ -338,10 +342,8 @@ def main():
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
         "ignored_layers": [],
-        "channel_groups": channel_groups,  # ⭐ 强制 q_proj 按 GQA 比例剪枝
-        "consecutive_groups": {
-            layer.self_attn.k_proj: layer.self_attn.head_dim for layer in model.model.layers
-        },
+        "channel_groups": channel_groups,  # ⭐ 只包含实际剪枝层的 q_proj
+        "consecutive_groups": consecutive_groups,  # ⭐ 只包含实际剪枝层的 k_proj
         "customized_pruners": {
             LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
         },
