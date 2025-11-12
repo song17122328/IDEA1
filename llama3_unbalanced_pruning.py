@@ -320,20 +320,15 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 为所有层配置 channel_groups 和 consecutive_groups
-    # 这是必需的，因为依赖图传播会影响到所有层
-    # 即使某些层不在 root_instances 中，也需要配置
-    channel_groups = {}
+    # 配置 consecutive_groups 用于 head-level 剪枝
+    # 与原始 llama3.py 保持一致：channel_groups 为空，只配置 consecutive_groups
     consecutive_groups = {}
     for layer in model.model.layers:  # 所有层 0-31
-        # q_proj 按 (gqa_ratio * head_dim) 通道一组
-        # 512通道 = 4个Q heads × 128
-        channel_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512
-        # k_proj 按 head_dim 通道一组
+        # k_proj 按 head_dim 通道一组（head-level 剪枝）
         consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128
 
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"channel_groups 和 consecutive_groups 应用于所有层 (依赖图传播需要)")
+    logger.log(f"consecutive_groups 应用于所有层的 k_proj (head-level 剪枝)")
 
     kwargs = {
         "importance": imp,
@@ -342,7 +337,7 @@ def main():
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率（只包含层 2-31）
         "ignored_layers": [],
-        "channel_groups": channel_groups,  # ⭐ 所有层的 q_proj
+        "channel_groups": {},  # ⭐ 空字典，与原始 llama3.py 一致
         "consecutive_groups": consecutive_groups,  # ⭐ 所有层的 k_proj
         "customized_pruners": {
             LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
