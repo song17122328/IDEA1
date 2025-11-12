@@ -384,17 +384,29 @@ def main():
             num_heads = q_out_channels // head_dim
             num_kv_heads = k_out_channels // head_dim
 
-            # 验证 num_heads 能被 num_kv_heads 整除（GQA 约束）
-            # 注意：torch_pruning 的依赖图传播可能无法完美维持 GQA 比例
-            # 这里只给出警告，不中断执行
+            # 验证并修正 GQA 比例
             if num_heads % num_kv_heads != 0:
                 logger.log(f"警告: Layer {layer_idx}: num_heads {num_heads} 不能被 num_kv_heads {num_kv_heads} 整除")
-                logger.log(f"       这可能影响模型推理性能，但不会导致错误")
-                # 尝试调整到最接近的有效比例
-                # 找到最接近的能被 num_kv_heads 整除的 num_heads
+
+                # 自动修正到最接近的有效比例
                 adjusted_num_heads = (num_heads // num_kv_heads) * num_kv_heads
-                if adjusted_num_heads > 0:
-                    logger.log(f"       建议调整: {num_heads} -> {adjusted_num_heads} (比例 {adjusted_num_heads}:{num_kv_heads})")
+                if adjusted_num_heads > 0 and adjusted_num_heads != num_heads:
+                    logger.log(f"       自动修正: {num_heads} -> {adjusted_num_heads} (比例 {adjusted_num_heads}:{num_kv_heads})")
+
+                    # 修剪 q_proj 权重和偏置
+                    adjusted_q_channels = adjusted_num_heads * head_dim
+                    layer.self_attn.q_proj.weight.data = layer.self_attn.q_proj.weight.data[:adjusted_q_channels, :]
+                    if layer.self_attn.q_proj.bias is not None:
+                        layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[:adjusted_q_channels]
+
+                    # 修剪 o_proj 的输入维度（因为它接收 q_proj 的输出）
+                    layer.self_attn.o_proj.weight.data = layer.self_attn.o_proj.weight.data[:, :adjusted_q_channels]
+
+                    # 更新 num_heads
+                    num_heads = adjusted_num_heads
+                    q_out_channels = adjusted_q_channels
+
+                    logger.log(f"       修正完成: q_proj {q_out_channels}通道, o_proj输入 {adjusted_q_channels}通道")
 
             layer.self_attn.num_heads = num_heads
             layer.self_attn.num_key_value_heads = num_kv_heads
