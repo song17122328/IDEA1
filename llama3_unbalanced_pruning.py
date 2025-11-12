@@ -314,6 +314,23 @@ def main():
         root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # Attention
         root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
 
+    # 获取 GQA 配置
+    num_heads = model.config.num_attention_heads  # 32
+    num_key_value_heads = model.config.num_key_value_heads  # 8
+    head_dim = 128
+    gqa_ratio = num_heads // num_key_value_heads  # 4
+
+    # 配置 channel_groups 来强制 q_proj 和 k_proj 保持 GQA 比例
+    # 这确保了当 k_proj 剪枝 1 个 KV head (128通道) 时，q_proj 剪枝 4 个 Q heads (512通道)
+    channel_groups = {}
+    for layer in model.model.layers:
+        # q_proj 按 (gqa_ratio * head_dim) 通道一组
+        # 512通道 = 4个Q heads × 128
+        channel_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512
+
+    logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
+    logger.log(f"channel_groups: q_proj 按 {gqa_ratio * head_dim} 通道一组（{gqa_ratio} 个 Q heads）")
+
     kwargs = {
         "importance": imp,
         "global_pruning": False,
@@ -321,7 +338,7 @@ def main():
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
         "ignored_layers": [],
-        "channel_groups": {},  # 空字典，让依赖图自动传播（和原始 llama3.py 一样）
+        "channel_groups": channel_groups,  # ⭐ 强制 q_proj 按 GQA 比例剪枝
         "consecutive_groups": {
             layer.self_attn.k_proj: layer.self_attn.head_dim for layer in model.model.layers
         },
