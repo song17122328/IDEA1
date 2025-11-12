@@ -320,15 +320,17 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 配置 consecutive_groups 用于 head-level 剪枝
-    # 与原始 llama3.py 保持一致：channel_groups 为空，只配置 consecutive_groups
+    # 配置 consecutive_groups 用于维持 GQA 比例
+    # q_proj 按 (gqa_ratio * head_dim) 通道一组，确保每次剪 4 个 Q heads
+    # k_proj 按 head_dim 通道一组，确保每次剪 1 个 KV head
+    # 这样可以维持 4:1 的 GQA 比例
     consecutive_groups = {}
     for layer in model.model.layers:  # 所有层 0-31
-        # k_proj 按 head_dim 通道一组（head-level 剪枝）
-        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128
+        consecutive_groups[layer.self_attn.q_proj] = gqa_ratio * head_dim  # 512 (4 个 Q heads)
+        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128 (1 个 KV head)
 
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"consecutive_groups 应用于所有层的 k_proj (head-level 剪枝)")
+    logger.log(f"consecutive_groups: q_proj 按 {gqa_ratio * head_dim} 通道一组, k_proj 按 {head_dim} 通道一组")
 
     kwargs = {
         "importance": imp,
