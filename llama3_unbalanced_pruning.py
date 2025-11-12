@@ -347,7 +347,7 @@ def main():
             'tokenizer': tokenizer,
             'layer_pruning_rates': layer_pruning_rates,
             'layer_importance': layer_importance,
-        }, logger.best_checkpoint_path, weights_only=False)
+        }, logger.best_checkpoint_path)
 
         logger.log(f"模型已保存到: {logger.best_checkpoint_path}")
 
