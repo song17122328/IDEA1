@@ -230,7 +230,9 @@ def main():
     }
 
     # 进一步过滤：移除剪枝率太低的层（避免剪枝0个通道导致错误）
-    min_effective_rate = 0.01  # 最小有效剪枝率：1%
+    # 对于 k_proj (1024通道，head_dim=128)，至少需要剪枝 1个head = 128/1024 = 12.5%
+    # 为了安全，设置为 15%
+    min_effective_rate = 0.15  # 最小有效剪枝率：15%
     effective_pruning_rates = {
         idx: rate for idx, rate in filtered_pruning_rates.items()
         if rate >= min_effective_rate
@@ -241,7 +243,7 @@ def main():
     if skipped_layers:
         logger.log(f"警告：以下层的剪枝率 < {min_effective_rate:.2%}，已跳过：{sorted(skipped_layers)}")
         for idx in sorted(skipped_layers):
-            logger.log(f"  Layer {idx}: {filtered_pruning_rates[idx]:.4f}")
+            logger.log(f"  Layer {idx}: {filtered_pruning_rates[idx]:.4f} (需要 >= {min_effective_rate:.2%} 才能剪枝至少1个attention head)")
 
     ch_sparsity_dict = create_ch_sparsity_dict_for_llama(
         model,
