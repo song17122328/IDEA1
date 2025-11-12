@@ -34,6 +34,71 @@ def main(args):
     pruned_dict = torch.load(args.prune_model, map_location='cpu', weights_only=False)
     tokenizer, model = pruned_dict['tokenizer'], pruned_dict['model']
 
+    # 修正剪枝后模型的配置信息
+    # 由于剪枝可能改变了 head 数量，需要根据实际权重维度更新 config
+    print("\n" + "=" * 80)
+    print("检查并修正模型配置...")
+    print("=" * 80)
+
+    head_dim = 128  # Llama-3 的 head dimension
+
+    # 从第一个有效层推断配置（跳过可能未剪枝的前几层）
+    # 检查 layer 2 作为代表层
+    representative_layer = model.model.layers[2] if len(model.model.layers) > 2 else model.model.layers[0]
+
+    q_out_channels = representative_layer.self_attn.q_proj.weight.shape[0]
+    k_out_channels = representative_layer.self_attn.k_proj.weight.shape[0]
+
+    actual_num_heads = q_out_channels // head_dim
+    actual_num_kv_heads = k_out_channels // head_dim
+
+    print(f"原始 config:")
+    print(f"  num_attention_heads: {model.config.num_attention_heads}")
+    print(f"  num_key_value_heads: {model.config.num_key_value_heads}")
+    print(f"  hidden_size: {model.config.hidden_size}")
+
+    print(f"\n从权重推断的实际配置 (基于 Layer 2):")
+    print(f"  actual_num_attention_heads: {actual_num_heads}")
+    print(f"  actual_num_key_value_heads: {actual_num_kv_heads}")
+    print(f"  actual_hidden_size: {q_out_channels}")
+    print(f"  GQA ratio: {actual_num_heads // actual_num_kv_heads}:1")
+
+    # 更新模型全局配置（使用主要层的配置）
+    model.config.num_attention_heads = actual_num_heads
+    model.config.num_key_value_heads = actual_num_kv_heads
+
+    # 关键修复：更新每个 Attention 层内部的 num_heads 和 num_key_value_heads
+    # 这些值在 forward 时用于 reshape 和 repeat 操作
+    print(f"\n逐层修正 Attention 配置...")
+    inconsistent_layers = []
+    for i, layer in enumerate(model.model.layers):
+        # 从实际权重推断该层的 head 数量
+        layer_q = layer.self_attn.q_proj.weight.shape[0] // head_dim
+        layer_kv = layer.self_attn.k_proj.weight.shape[0] // head_dim
+
+        # 更新该层 Attention 模块的配置
+        layer.self_attn.num_heads = layer_q
+        layer.self_attn.num_key_value_heads = layer_kv
+        layer.self_attn.num_key_value_groups = layer_q // layer_kv
+
+        if layer_q != actual_num_heads or layer_kv != actual_num_kv_heads:
+            inconsistent_layers.append((i, layer_q, layer_kv))
+
+    if inconsistent_layers:
+        print(f"⚠️  发现 {len(inconsistent_layers)} 层的配置与代表层不同:")
+        for layer_idx, q_heads, kv_heads in inconsistent_layers[:5]:  # 只显示前5个
+            print(f"  Layer {layer_idx}: {q_heads} Q heads, {kv_heads} KV heads (ratio {q_heads//kv_heads}:1)")
+        if len(inconsistent_layers) > 5:
+            print(f"  ... 还有 {len(inconsistent_layers) - 5} 层")
+    else:
+        print(f"✅ 所有层配置一致: {actual_num_heads}:{actual_num_kv_heads}")
+
+    print(f"\n✅ 模型配置已完全修正:")
+    print(f"  全局 config.num_attention_heads: {model.config.num_attention_heads}")
+    print(f"  全局 config.num_key_value_heads: {model.config.num_key_value_heads}")
+    print(f"  每层的 self_attn.num_heads 已根据实际权重更新")
+    print("=" * 80 + "\n")
+
     gradient_accumulation_steps = args.batch_size // args.micro_batch_size
     if not args.no_instruction:
         prompter = Prompter(args.prompt_template_name)
