@@ -186,7 +186,7 @@ def main(args):
             logging_steps=10,
             logging_first_step=True,
             optim="adamw_torch",
-            evaluation_strategy="steps",
+            eval_strategy="steps",  # 修复：evaluation_strategy → eval_strategy (Transformers 新版本)
             save_strategy="steps",
             eval_steps=100,
             save_steps=200,
