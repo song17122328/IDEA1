@@ -178,7 +178,7 @@ class UnbalancedStructuredPruningCalculator:
         if use_log_transform:
             # 平移使所有值为正（最小值+1），然后取对数
             min_val = importance_values.min()
-            shifted_importance = importance_values + abs(min_val) + 1.0
+            shifted_importance = importance_values - min_val + 1.0
             log_importance = np.log(shifted_importance)
             importance_values = log_importance
 
