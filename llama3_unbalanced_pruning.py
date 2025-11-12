@@ -271,6 +271,10 @@ def main():
         json.dump(ch_sparsity_readable, f, indent=2, ensure_ascii=False)
     logger.log(f"ch_sparsity_dict 已保存到: {ch_sparsity_path}")
 
+    # 获取实际参与剪枝的层列表
+    actual_pruning_layers = sorted(effective_pruning_rates.keys())
+    logger.log(f"实际参与剪枝的层: {actual_pruning_layers}")
+
     # ==================== 步骤4: 执行结构化剪枝 ====================
     logger.log("=" * 80)
     logger.log("步骤4: 执行结构化剪枝")
@@ -314,11 +318,18 @@ def main():
         # 将 q_proj 分组，确保 q_heads : kv_heads = 4:1
         channel_groups[layer.self_attn.q_proj] = gqa_ratio
 
+    # 只为实际参与剪枝的层创建 root_instances
+    # 这样可以避免未在 ch_sparsity_dict 中的层使用默认剪枝率
+    root_instances = []
+    for layer_idx in actual_pruning_layers:
+        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # Attention
+        root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
+
     kwargs = {
         "importance": imp,
         "global_pruning": False,
         "iterative_steps": args.iterative_steps,
-        "ch_sparsity": args.pruning_ratio,  # 默认剪枝率
+        "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
         "ignored_layers": [],
         "channel_groups": channel_groups,  # GQA 比例约束
@@ -329,12 +340,11 @@ def main():
             LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
         },
         "root_module_types": None,
-        "root_instances": [model.model.layers[i].self_attn.k_proj for i in range(args.block_attention_layer_start, args.block_attention_layer_end)] +
-                         [model.model.layers[i].mlp.gate_proj for i in range(args.block_mlp_layer_start, args.block_mlp_layer_end)]
+        "root_instances": root_instances  # ⭐ 只包含实际参与剪枝的层
     }
 
-    logger.log(f"剪枝 Attention 层 = {list(range(args.block_attention_layer_start, args.block_attention_layer_end))}")
-    logger.log(f"剪枝 MLP 层 = {list(range(args.block_mlp_layer_start, args.block_mlp_layer_end))}")
+    logger.log(f"实际剪枝 Attention 和 MLP 的层: {actual_pruning_layers}")
+    logger.log(f"root_instances 数量: {len(root_instances)} (每层2个模块: k_proj + gate_proj)")
 
     # 创建剪枝器
     pruner = tp.pruner.MetaPruner(model, forward_prompts, **kwargs)
