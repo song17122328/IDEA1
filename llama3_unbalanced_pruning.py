@@ -308,10 +308,11 @@ def main():
     logger.log(f"使用 {args.pruner_type} 剪枝器...")
 
     # 只为实际参与剪枝的层创建 root_instances
-    # 这样可以避免未在 ch_sparsity_dict 中的层使用默认剪枝率
+    # 包含 q_proj 和 k_proj 以确保 GQA 比例约束生效
     root_instances = []
     for layer_idx in actual_pruning_layers:
-        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # Attention
+        root_instances.append(model.model.layers[layer_idx].self_attn.q_proj)  # Q projections
+        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # KV projections
         root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
 
     # 获取 GQA 配置
@@ -349,7 +350,7 @@ def main():
     }
 
     logger.log(f"实际剪枝 Attention 和 MLP 的层: {actual_pruning_layers}")
-    logger.log(f"root_instances 数量: {len(root_instances)} (每层2个模块: k_proj + gate_proj)")
+    logger.log(f"root_instances 数量: {len(root_instances)} (每层3个模块: q_proj + k_proj + gate_proj)")
 
     # 创建剪枝器
     pruner = tp.pruner.MetaPruner(model, forward_prompts, **kwargs)
