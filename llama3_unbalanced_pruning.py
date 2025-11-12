@@ -186,7 +186,8 @@ def main():
         strategy=args.pruning_strategy,
         alpha=args.alpha,
         min_rate=args.min_pruning_rate,
-        max_rate=args.max_pruning_rate
+        max_rate=args.max_pruning_rate,
+        use_log_transform=True  # 使用对数变换处理极端值
     )
 
     # 验证剪枝率

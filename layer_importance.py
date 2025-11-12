@@ -149,7 +149,8 @@ class UnbalancedStructuredPruningCalculator:
                                     strategy: str = 'inverse',
                                     alpha: float = 1.0,
                                     min_rate: float = 0.0,
-                                    max_rate: float = 0.8) -> Dict[int, float]:
+                                    max_rate: float = 0.8,
+                                    use_log_transform: bool = True) -> Dict[int, float]:
         """
         根据层重要性计算各层剪枝率
 
@@ -162,6 +163,7 @@ class UnbalancedStructuredPruningCalculator:
             alpha: 重要性权重系数，越大差异越明显
             min_rate: 最小剪枝率
             max_rate: 最大剪枝率
+            use_log_transform: 是否使用对数变换处理极端值（推荐）
 
         Returns:
             Dict[int, float]: 每层的剪枝率
@@ -171,6 +173,14 @@ class UnbalancedStructuredPruningCalculator:
             return {idx: target_overall_rate for idx in range(self.num_layers)}
 
         importance_values = np.array(list(self.layer_importance.values()))
+
+        # 对数变换处理极端值
+        if use_log_transform:
+            # 平移使所有值为正（最小值+1），然后取对数
+            min_val = importance_values.min()
+            shifted_importance = importance_values - min_val + 1.0
+            log_importance = np.log(shifted_importance)
+            importance_values = log_importance
 
         if strategy == 'inverse':
             # 重要性高 -> 剪枝率低
