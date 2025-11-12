@@ -86,7 +86,7 @@ class LayerImportanceAnalyzer:
                 importance = ppl - baseline_ppl  # 困惑度增加越多，该层越重要
                 layer_importance[layer_idx] = importance
 
-                print(f"第 {layer_idx} 层: PPL 变化 = {importance:.4f}")
+                # print(f"第 {layer_idx} 层: PPL 变化 = {importance:.4f}")
             finally:
                 # 无论是否出错，都要恢复该层
                 self.model.model.layers[layer_idx].forward = original_forward
