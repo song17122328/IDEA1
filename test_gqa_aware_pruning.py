@@ -35,8 +35,12 @@ def evaluate_ppl(model, tokenizer, device):
     from LLMPruner.evaluator.ppl import PPLMetric
 
     try:
-        ppl = PPLMetric(model, tokenizer, ['wikitext2'], max_seq_len=128, device=device)
-        return ppl['wikitext2']
+        # 注意：参数名是seq_len而不是max_seq_len
+        ppl_dict = PPLMetric(model, tokenizer, ['wikitext2'], seq_len=128, device=device)
+        # PPLMetric返回字典，key类似 'wikitext2 (wikitext-2-raw-v1)'
+        # 取第一个值
+        ppl_value = list(ppl_dict.values())[0] if ppl_dict else None
+        return ppl_value
     except Exception as e:
         print(f"PPL评估失败: {e}")
         return None
@@ -63,10 +67,14 @@ def test_single_layer_pruning(args):
     print(f"✅ 模型加载完成")
 
     # 2. 评估原始PPL（可选）
+    original_ppl = None
     if args.eval_ppl:
         print("\n2. 评估原始模型PPL...")
         original_ppl = evaluate_ppl(model, tokenizer, args.device)
-        print(f"原始PPL: {original_ppl:.2f}")
+        if original_ppl is not None:
+            print(f"原始PPL: {original_ppl:.2f}")
+        else:
+            print(f"原始PPL: 评估失败")
 
     # 3. 准备测试数据
     print("\n3. 准备测试数据...")
@@ -151,9 +159,12 @@ def test_single_layer_pruning(args):
     if args.eval_ppl:
         print("\n9. 评估剪枝后PPL...")
         pruned_ppl = evaluate_ppl(model, tokenizer, args.device)
-        print(f"   剪枝后PPL: {pruned_ppl:.2f}")
-        if original_ppl:
-            print(f"   PPL变化: {original_ppl:.2f} → {pruned_ppl:.2f} (×{pruned_ppl/original_ppl:.2f})")
+        if pruned_ppl is not None:
+            print(f"   剪枝后PPL: {pruned_ppl:.2f}")
+            if original_ppl is not None:
+                print(f"   PPL变化: {original_ppl:.2f} → {pruned_ppl:.2f} (×{pruned_ppl/original_ppl:.2f})")
+        else:
+            print(f"   剪枝后PPL: 评估失败")
 
     print("\n" + "=" * 80)
     print("测试完成!")
