@@ -330,7 +330,7 @@ def main():
 
         # 计算GQA组的importance
         group_imp = compute_gqa_group_importance(layer, args.head_dim, args.gqa_ratio)
-        logger.log(f"   GQA组importance: {group_imp.cpu().numpy()}")
+        logger.log(f"   GQA组importance: {group_imp.detach().cpu().numpy()}")
 
         # 确定要保留的GQA组数量
         num_kv_heads = len(group_imp)
