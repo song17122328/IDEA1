@@ -4,7 +4,8 @@
 """
 import torch
 import argparse
-from transformers import AutoTokenizer
+import os
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from LLMPruner.evaluator.ppl import PPLMetric
 
 def main():
@@ -19,14 +20,22 @@ def main():
     print("评估微调后的模型")
     print("=" * 80)
 
-    # 加载模型
-    print(f"\n加载模型: {args.model_path}")
-    checkpoint = torch.load(args.model_path + '/pytorch_model.bin',
-                           map_location='cpu', weights_only=False)
-    model = checkpoint['model']
-    tokenizer = checkpoint['tokenizer']
+    # 加载模型 - 从 HuggingFace 格式的 merged_model 目录
+    merged_model_path = os.path.join(args.model_path, 'merged_model')
 
-    model.to(args.device)
+    if not os.path.exists(merged_model_path):
+        print(f"❌ 错误：找不到合并后的模型目录: {merged_model_path}")
+        print("   请确保训练已完成并成功保存了 merged_model")
+        return
+
+    print(f"\n加载模型: {merged_model_path}")
+    model = AutoModelForCausalLM.from_pretrained(
+        merged_model_path,
+        torch_dtype=torch.float16,
+        device_map=args.device
+    )
+    tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
+
     model.eval()
 
     # 评估 PPL

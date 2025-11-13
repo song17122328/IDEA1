@@ -263,14 +263,15 @@ def main(args):
     from peft import PeftModel
     base_model = model.merge_and_unload()
 
-    # Save full model in the format expected by evaluation scripts
-    full_model_path = os.path.join(args.output_dir, 'pytorch_model.bin')
-    torch.save({
-        'model': base_model,
-        'tokenizer': tokenizer
-    }, full_model_path)
+    # Save merged model using save_pretrained (HuggingFace format)
+    merged_model_dir = os.path.join(args.output_dir, 'merged_model')
+    os.makedirs(merged_model_dir, exist_ok=True)
 
-    print(f"✅ 完整模型已保存到: {full_model_path}")
+    base_model.save_pretrained(merged_model_dir)
+    tokenizer.save_pretrained(merged_model_dir)
+
+    print(f"✅ 完整模型已保存到: {merged_model_dir}")
+    print("   - 使用 HuggingFace 格式保存，避免序列化问题")
     print("="*80)
 
 
