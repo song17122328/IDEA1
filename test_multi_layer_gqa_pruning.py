@@ -115,9 +115,15 @@ def test_multi_layer_pruning(args):
     print("-" * 80)
 
     layer_results = {}
+    pruned_layer_indices = []  # 记录已剪枝的层
 
     for layer_idx in args.layers:
         print(f"\n处理 Layer {layer_idx}...")
+
+        # 关键修复：禁用已剪枝层的梯度计算，避免形状不匹配
+        for pruned_idx in pruned_layer_indices:
+            for param in model.model.layers[pruned_idx].parameters():
+                param.requires_grad = False
 
         # 前向+反向传播计算梯度
         model.zero_grad()
@@ -144,7 +150,7 @@ def test_multi_layer_pruning(args):
         print(f"  剪枝组: {prune_indices}")
         print(f"  GQA比例: {num_q//num_kv}:1 ✓")
 
-        # 关键修复：剪枝后彻底清理计算图和梯度缓存
+        # 清理计算图和梯度缓存
         del loss
         model.zero_grad()
 
@@ -156,6 +162,9 @@ def test_multi_layer_pruning(args):
 
         # 清理CUDA缓存
         torch.cuda.empty_cache()
+
+        # 记录已剪枝的层
+        pruned_layer_indices.append(layer_idx)
 
         # 验证剪枝后的layer能正常forward
         with torch.no_grad():
