@@ -409,14 +409,13 @@ def main():
             # 例如：剪掉256通道 → Q和KV都剪掉2个heads → 30:6 (5:1) ✗
             # 我们需要强制调整为 24:6 (4:1) ✓
             original_gqa_ratio = model.config.num_attention_heads // model.config.num_key_value_heads  # 4
-            current_ratio = num_heads // num_kv_heads if num_kv_heads > 0 else 0
+            target_num_heads = num_kv_heads * original_gqa_ratio
 
-            if current_ratio != original_gqa_ratio:
-                # 计算应该保留的Q heads数量（保持原始4:1比例）
-                target_num_heads = num_kv_heads * original_gqa_ratio
-
+            # 关键修复：直接比较 head 数量，而不是比较比例
+            # 原因：整数除法会掩盖不匹配（31//7=4, 但31≠7*4=28）
+            if num_heads != target_num_heads:
                 logger.log(f"⚠️  Layer {layer_idx}: GQA 比例不匹配")
-                logger.log(f"   当前: {num_heads}:{num_kv_heads} = {current_ratio}:1")
+                logger.log(f"   当前: {num_heads}:{num_kv_heads} = {num_heads/num_kv_heads:.2f}:1")
                 logger.log(f"   目标: {target_num_heads}:{num_kv_heads} = {original_gqa_ratio}:1")
                 logger.log(f"   说明：torch_pruning的依赖图传播是'通道对通道'的，")
                 logger.log(f"   不理解GQA的{original_gqa_ratio}:1结构，需要后处理修正")
