@@ -33,7 +33,7 @@ CUDA_VISIBLE_DEVICES=$GPU_IDS torchrun \
     --prune_model "$PRUNE_MODEL" \
     --data_path yahma/alpaca-cleaned \
     --output_dir "$OUTPUT_DIR" \
-    --disable_wandb \
+    --wandb_project llama3-pruned-finetune-multi-gpu \
     --num_epochs 3 \
     --learning_rate 3e-4 \
     --batch_size 512 \
