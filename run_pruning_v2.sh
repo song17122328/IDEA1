@@ -8,8 +8,8 @@ DEVICE="cuda:6"
 
 # 剪枝参数（与之前相同）
 PRUNING_RATIO=0.25
-MIN_EFFECTIVE_RATE=0.0
-MAX_EFFECTIVE_RATE=0.3
+MIN_PRUNING_RATE=0.0
+MAX_PRUNING_RATE=0.3
 
 echo "=================================="
 echo "重新剪枝 Llama-3-8B"
@@ -17,6 +17,8 @@ echo "=================================="
 echo "基础模型: $BASE_MODEL"
 echo "输出目录: $OUTPUT_DIR"
 echo "剪枝比例: $PRUNING_RATIO"
+echo "最小剪枝率: $MIN_PRUNING_RATE"
+echo "最大剪枝率: $MAX_PRUNING_RATE"
 echo "=================================="
 
 python llama3_unbalanced_pruning.py \
@@ -25,8 +27,8 @@ python llama3_unbalanced_pruning.py \
     --device $DEVICE \
     --save_model \
     --save_ckpt_log_name $OUTPUT_DIR \
-    --min_effective_rate $MIN_EFFECTIVE_RATE \
-    --max_effective_rate $MAX_EFFECTIVE_RATE \
+    --min_pruning_rate $MIN_PRUNING_RATE \
+    --max_pruning_rate $MAX_PRUNING_RATE \
     --test_after_train
 
 echo "=================================="
