@@ -488,7 +488,7 @@ def main():
             layer.self_attn.num_key_value_heads = actual_kv_heads
             layer.self_attn.num_key_value_groups = actual_q_heads // actual_kv_heads
 
-            logger.log(f"  Layer {i}: {actual_q_heads} Q heads, {actual_kv_heads} KV heads, ratio {actual_q_heads/actual_kv_heads:1f}:1")
+            logger.log(f"  Layer {i}: {actual_q_heads} Q heads, {actual_kv_heads} KV heads, ratio {actual_q_heads/actual_kv_heads:.1f}:1")
 
         logger.log("✅ 配置检查完成\n")
 
