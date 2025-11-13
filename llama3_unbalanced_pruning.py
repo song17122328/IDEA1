@@ -321,12 +321,19 @@ def main():
 
     logger.log(f"使用 {args.pruner_type} 剪枝器...")
 
-    # 只为实际参与剪枝的层创建 root_instances
-    # 关键：只让 k_proj 作为 root，让依赖图自动传播到 q_proj
-    # 这样torch_pruning的_ExpandIndexMapping才能正确工作，保持4:1比例
+    # ==================== 新方案：手动控制 GQA 剪枝 ====================
+    # 策略：让 q_proj 和 o_proj 不参与自动依赖图，手动剪枝以确保4:1比例
+    # 原因：torch_pruning的依赖图是"通道对通道"传播，无法理解GQA的4:1结构
+    #
+    # 步骤：
+    # 1. pruner 只管理 k_proj, v_proj, 和 MLP（不包括 q_proj, o_proj）
+    # 2. 每次 pruner.step() 后，手动剪枝 q_proj（确保是 k_proj 的4倍）
+    # 3. 同时手动调整 o_proj 输入维度（匹配 q_proj 输出）
+    # 4. 这样所有模块从始至终保持一致的维度，LoRA 不会遇到配置冲突
+
     root_instances = []
     for layer_idx in actual_pruning_layers:
-        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # 只有 k_proj
+        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # KV attention
         root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
 
     # 获取 GQA 配置
@@ -335,28 +342,40 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 配置 consecutive_groups 用于 head-level 剪枝
-    # 关键：只为 k_proj 设置 consecutive_groups，不设置 q_proj
-    # 这样 k_proj 会按 head 级别剪枝，q_proj 通过依赖图接收 4倍的索引
+    # 配置 consecutive_groups：让 k_proj 按 head 级别剪枝
     consecutive_groups = {}
-    for layer in model.model.layers:  # 所有层 0-31
-        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128 (1个KV head)
+    for layer in model.model.layers:
+        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 1个KV head = 128通道
 
+    # 关键：将 q_proj 和 o_proj 加入 ignored_layers，不让它们参与自动剪枝
+    # 我们会手动控制它们的剪枝
+    ignored_layers = []
+    for layer in model.model.layers:
+        ignored_layers.append(layer.self_attn.q_proj)
+        ignored_layers.append(layer.self_attn.o_proj)
+
+    logger.log("=" * 80)
+    logger.log("🔧 新的 GQA-aware 剪枝策略")
+    logger.log("=" * 80)
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"剪枝配置（与原始llama3.py一致）:")
-    logger.log(f"  - root_instances: 仅 k_proj 和 gate_proj")
-    logger.log(f"  - consecutive_groups: 仅 k_proj (128通道/head)")
-    logger.log(f"  - q_proj 通过依赖图自动从 k_proj 接收剪枝索引")
-    logger.log(f"  - _ExpandIndexMapping 会将 KV head 索引×{gqa_ratio}转换为 Q head 索引")
-    logger.log(f"  - 预期结果：剪掉2个KV heads → 自动剪掉8个Q heads → 保持4:1比例")
+    logger.log(f"\n剪枝配置:")
+    logger.log(f"  - root_instances: k_proj 和 gate_proj")
+    logger.log(f"  - consecutive_groups: k_proj (128通道/head)")
+    logger.log(f"  - ignored_layers: q_proj 和 o_proj（手动控制以确保4:1比例）")
+    logger.log(f"\n工作流程:")
+    logger.log(f"  1. pruner.step() 剪枝 k_proj 和 MLP")
+    logger.log(f"  2. 手动剪枝 q_proj（确保 Q heads = KV heads × 4）")
+    logger.log(f"  3. 手动调整 o_proj 输入维度（匹配 q_proj 输出）")
+    logger.log(f"  4. 所有模块维度一致，无需后处理")
+    logger.log("=" * 80 + "\n")
 
     kwargs = {
         "importance": imp,
         "global_pruning": False,
         "iterative_steps": args.iterative_steps,
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
-        "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率（只包含层 2-31）
-        "ignored_layers": [],
+        "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
+        "ignored_layers": ignored_layers,  # ⭐ 忽略 q_proj 和 o_proj，我们会手动处理
         "channel_groups": {},  # ⭐ 空字典，与原始 llama3.py 一致
         "consecutive_groups": consecutive_groups,  # ⭐ 强制 k_proj 按 128 通道分组
         "customized_pruners": {
@@ -385,67 +404,55 @@ def main():
             logger.log(f"Loss = {loss.item()}")
             loss.backward()
 
-        # 执行剪枝
+        # 执行剪枝（只剪枝 k_proj, v_proj, MLP）
         pruner.step()
 
-        after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        logger.log(f"迭代 {i+1}/{args.iterative_steps} 后参数量: {after_pruning_parameters:,}")
+        logger.log(f"\n{'='*80}")
+        logger.log(f"迭代 {i+1}/{args.iterative_steps}: 手动处理 Q-projection 和 O-projection")
+        logger.log(f"{'='*80}")
 
-        # 更新推理相关属性
+        # 手动剪枝 q_proj 和调整 o_proj（确保 4:1 GQA 比例）
+        original_gqa_ratio = model.config.num_attention_heads // model.config.num_key_value_heads  # 4
+        head_dim = 128
+
         for layer_idx, layer in enumerate(model.model.layers):
-            q_out_channels = layer.self_attn.q_proj.weight.data.shape[0]
+            # 1. 读取 k_proj 剪枝后的维度（由 pruner 处理）
             k_out_channels = layer.self_attn.k_proj.weight.data.shape[0]
-            head_dim = layer.self_attn.head_dim
-
-            # 验证通道数是 head_dim 的倍数
-            assert q_out_channels % head_dim == 0, f"Layer {layer_idx}: q_proj 输出通道 {q_out_channels} 不是 head_dim {head_dim} 的倍数"
-            assert k_out_channels % head_dim == 0, f"Layer {layer_idx}: k_proj 输出通道 {k_out_channels} 不是 head_dim {head_dim} 的倍数"
-
-            num_heads = q_out_channels // head_dim
+            assert k_out_channels % head_dim == 0, f"Layer {layer_idx}: k_proj 维度 {k_out_channels} 不是 head_dim {head_dim} 的倍数"
             num_kv_heads = k_out_channels // head_dim
 
-            # 强制保持原始的 GQA 比例 (4:1)
-            # torch_pruning的依赖图是"通道对通道"传播，不理解GQA的4:1结构
-            # 例如：剪掉256通道 → Q和KV都剪掉2个heads → 30:6 (5:1) ✗
-            # 我们需要强制调整为 24:6 (4:1) ✓
-            original_gqa_ratio = model.config.num_attention_heads // model.config.num_key_value_heads  # 4
+            # 2. 计算目标 q_proj 维度（保持 4:1 比例）
             target_num_heads = num_kv_heads * original_gqa_ratio
+            target_q_channels = target_num_heads * head_dim
 
-            # 关键修复：直接比较 head 数量，而不是比较比例
-            # 原因：整数除法会掩盖不匹配（31//7=4, 但31≠7*4=28）
-            if num_heads != target_num_heads:
-                logger.log(f"⚠️  Layer {layer_idx}: GQA 比例不匹配")
-                logger.log(f"   当前: {num_heads}:{num_kv_heads} = {num_heads/num_kv_heads:.2f}:1")
-                logger.log(f"   目标: {target_num_heads}:{num_kv_heads} = {original_gqa_ratio}:1")
-                logger.log(f"   说明：torch_pruning的依赖图传播是'通道对通道'的，")
-                logger.log(f"   不理解GQA的{original_gqa_ratio}:1结构，需要后处理修正")
+            # 3. 获取当前 q_proj 维度
+            current_q_channels = layer.self_attn.q_proj.weight.data.shape[0]
+            current_q_in_channels = layer.self_attn.q_proj.weight.data.shape[1]
 
-                if target_num_heads > 0 and target_num_heads != num_heads:
-                    logger.log(f"   → 强制修正: {num_heads} Q heads → {target_num_heads} Q heads")
+            # 4. 如果需要，手动剪枝 q_proj（选择前 N 个 heads）
+            if current_q_channels != target_q_channels:
+                logger.log(f"Layer {layer_idx}: 手动剪枝 q_proj")
+                logger.log(f"  当前 Q heads: {current_q_channels // head_dim}")
+                logger.log(f"  当前 KV heads: {num_kv_heads}")
+                logger.log(f"  目标 Q heads: {target_num_heads} (KV {num_kv_heads} × {original_gqa_ratio})")
 
-                    # 修剪 q_proj 权重和偏置
-                    adjusted_q_channels = target_num_heads * head_dim
-                    layer.self_attn.q_proj.weight.data = layer.self_attn.q_proj.weight.data[:adjusted_q_channels, :]
-                    if layer.self_attn.q_proj.bias is not None:
-                        layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[:adjusted_q_channels]
+                # 剪枝 q_proj 权重：只保留前 target_q_channels 个输出通道
+                layer.self_attn.q_proj.weight.data = layer.self_attn.q_proj.weight.data[:target_q_channels, :]
+                if layer.self_attn.q_proj.bias is not None:
+                    layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[:target_q_channels]
 
-                    # 修剪 o_proj 的输入维度（因为它接收 q_proj 的输出）
-                    layer.self_attn.o_proj.weight.data = layer.self_attn.o_proj.weight.data[:, :adjusted_q_channels]
+                # 调整 o_proj 的输入维度（它接收 q_proj 的输出）
+                layer.self_attn.o_proj.weight.data = layer.self_attn.o_proj.weight.data[:, :target_q_channels]
 
-                    # 更新 num_heads
-                    num_heads = target_num_heads
-                    q_out_channels = adjusted_q_channels
+                logger.log(f"  ✅ 已调整: Q {target_num_heads} heads, KV {num_kv_heads} heads → {original_gqa_ratio}:1")
 
-                    logger.log(f"   ✅ 修正完成: {num_heads}:{num_kv_heads} = {original_gqa_ratio}:1")
-                else:
-                    logger.log(f"   ⚠️  无法修正：目标 head 数量为 {target_num_heads}")
-            else:
-                # 比例已经正确，不需要修正
-                pass  # 静默处理，避免日志过多
-
-            layer.self_attn.num_heads = num_heads
+            # 5. 更新层配置
+            layer.self_attn.num_heads = target_num_heads
             layer.self_attn.num_key_value_heads = num_kv_heads
-            layer.self_attn.num_key_value_groups = num_heads // num_kv_heads  # 添加 groups 配置
+            layer.self_attn.num_key_value_groups = target_num_heads // num_kv_heads
+
+        after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logger.log(f"\n迭代 {i+1}/{args.iterative_steps} 完成，参数量: {after_pruning_parameters:,}")
 
     # 清理梯度
     model.zero_grad()
