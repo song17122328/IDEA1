@@ -83,14 +83,14 @@ def main():
     parser.add_argument('--max_pruning_rate', type=float, default=0.8,
                        help='最大剪枝率')
 
-    # 剪枝范围
-    parser.add_argument('--block_attention_layer_start', type=int, default=3,
+    # 剪枝范围（默认剪枝所有层）
+    parser.add_argument('--block_attention_layer_start', type=int, default=0,
                        help='Attention 剪枝起始层')
-    parser.add_argument('--block_attention_layer_end', type=int, default=30,
+    parser.add_argument('--block_attention_layer_end', type=int, default=31,
                        help='Attention 剪枝结束层')
-    parser.add_argument('--block_mlp_layer_start', type=int, default=3,
+    parser.add_argument('--block_mlp_layer_start', type=int, default=0,
                        help='MLP 剪枝起始层')
-    parser.add_argument('--block_mlp_layer_end', type=int, default=30,
+    parser.add_argument('--block_mlp_layer_end', type=int, default=31,
                        help='MLP 剪枝结束层')
 
     # 其他参数
