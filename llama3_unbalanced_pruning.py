@@ -410,6 +410,7 @@ def main():
 
             layer.self_attn.num_heads = num_heads
             layer.self_attn.num_key_value_heads = num_kv_heads
+            layer.self_attn.num_key_value_groups = num_heads // num_kv_heads  # 添加 groups 配置
 
     # 清理梯度
     model.zero_grad()
@@ -438,6 +439,23 @@ def main():
         logger.log("=" * 80)
         logger.log("步骤5: 保存模型")
         logger.log("=" * 80)
+
+        # 保存前最终配置确认和修正（确保所有配置正确，避免 LoRA 维度不匹配）
+        logger.log("\n保存前最终配置检查...")
+        head_dim = 128
+        for i, layer in enumerate(model.model.layers):
+            # 从实际权重推断配置
+            actual_q_heads = layer.self_attn.q_proj.weight.shape[0] // head_dim
+            actual_kv_heads = layer.self_attn.k_proj.weight.shape[0] // head_dim
+
+            # 强制更新所有相关配置
+            layer.self_attn.num_heads = actual_q_heads
+            layer.self_attn.num_key_value_heads = actual_kv_heads
+            layer.self_attn.num_key_value_groups = actual_q_heads // actual_kv_heads
+
+            logger.log(f"  Layer {i}: {actual_q_heads} Q heads, {actual_kv_heads} KV heads, ratio {actual_q_heads//actual_kv_heads}:1")
+
+        logger.log("✅ 配置检查完成\n")
 
         model.half()
         torch.save({
