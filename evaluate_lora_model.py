@@ -28,8 +28,21 @@ def main():
     tokenizer = pruned_dict['tokenizer']
     print("✅ 基础模型加载完成")
 
-    # 2. 加载 LoRA adapter
-    print(f"\n2. 加载 LoRA adapter: {args.lora_dir}")
+    # 修正剪枝后模型的配置（与 post_training.py 中相同的逻辑）
+    print(f"\n2. 修正模型配置（基于实际权重维度）...")
+    head_dim = 128
+    for i, layer in enumerate(base_model.model.layers):
+        layer_q = layer.self_attn.q_proj.weight.shape[0] // head_dim
+        layer_kv = layer.self_attn.k_proj.weight.shape[0] // head_dim
+
+        # 更新该层 Attention 模块的配置
+        layer.self_attn.num_heads = layer_q
+        layer.self_attn.num_key_value_heads = layer_kv
+        layer.self_attn.num_key_value_groups = layer_q // layer_kv
+    print("✅ 配置修正完成")
+
+    # 3. 加载 LoRA adapter
+    print(f"\n3. 加载 LoRA adapter: {args.lora_dir}")
     model = PeftModel.from_pretrained(base_model, args.lora_dir)
     print("✅ LoRA adapter 加载完成")
 
