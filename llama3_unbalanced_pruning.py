@@ -249,8 +249,7 @@ def main():
         model,
         effective_pruning_rates,
         prune_attention=True,
-        prune_mlp=True,
-        gqa_aware=True  # 启用GQA感知模式：q_proj, k_proj, v_proj都作为root
+        prune_mlp=True
     )
 
     logger.log(f"为 {len(ch_sparsity_dict)} 个模块设置了自定义剪枝率")
@@ -335,8 +334,7 @@ def main():
         model,
         effective_pruning_rates,
         prune_attention=True,
-        prune_mlp=True,
-        gqa_aware=True  # 启用GQA感知模式：q_proj, k_proj, v_proj都作为root
+        prune_mlp=True
     )
 
     logger.log(f"\n✅ head 数量已提前调整，确保满足 GQA 约束")
@@ -376,12 +374,11 @@ def main():
     logger.log(f"使用 {args.pruner_type} 剪枝器...")
 
     # 只为实际参与剪枝的层创建 root_instances
-    # GQA感知模式：将q_proj, k_proj, v_proj都设置为root modules（独立剪枝）
+    # 关键：只让 k_proj 作为 root，让依赖图自动传播到 q_proj
+    # 这样torch_pruning的_ExpandIndexMapping才能正确工作，保持4:1比例
     root_instances = []
     for layer_idx in actual_pruning_layers:
-        root_instances.append(model.model.layers[layer_idx].self_attn.q_proj)  # Q projection
-        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # K projection
-        root_instances.append(model.model.layers[layer_idx].self_attn.v_proj)  # V projection
+        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # 只有 k_proj
         root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
 
     # 获取 GQA 配置
@@ -391,23 +388,19 @@ def main():
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
     # 配置 consecutive_groups 用于 head-level 剪枝
-    # GQA感知模式：为q_proj, k_proj, v_proj都设置consecutive_groups
-    # 关键思想：q_proj按4个Q heads为一组，k_proj/v_proj按1个KV head为一组
-    # 剪枝率相同时，它们会剪枝比例匹配的heads（但可能位置不同）
+    # 关键：只为 k_proj 设置 consecutive_groups，不设置 q_proj
+    # 这样 k_proj 会按 head 级别剪枝，q_proj 通过依赖图接收 4倍的索引
     consecutive_groups = {}
     for layer in model.model.layers:  # 所有层 0-31
-        # q_proj: 32 heads / 8 groups = 每组4个heads (512通道)
-        consecutive_groups[layer.self_attn.q_proj] = head_dim * gqa_ratio  # 512
-        # k_proj, v_proj: 8 heads / 8 groups = 每组1个head (128通道)
-        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128
-        consecutive_groups[layer.self_attn.v_proj] = head_dim  # 128
+        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128 (1个KV head)
 
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
-    logger.log(f"GQA感知剪枝模式已启用:")
-    logger.log(f"  - q_proj: consecutive_groups={head_dim * gqa_ratio} (每组{gqa_ratio}个Q heads)")
-    logger.log(f"  - k_proj, v_proj: consecutive_groups={head_dim} (每组1个KV head)")
-    logger.log(f"  - q/k/v独立剪枝，相同剪枝率 → 剪枝相同比例的heads")
-    logger.log(f"  - 示例：剪枝率0.25 → q剪2组(8 Q heads), k剪2个(2 KV heads) → 24:6=4:1 ✓")
+    logger.log(f"剪枝配置（与原始llama3.py一致）:")
+    logger.log(f"  - root_instances: 仅 k_proj 和 gate_proj")
+    logger.log(f"  - consecutive_groups: 仅 k_proj (128通道/head)")
+    logger.log(f"  - q_proj 通过依赖图自动从 k_proj 接收剪枝索引")
+    logger.log(f"  - _ExpandIndexMapping 会将 KV head 索引×{gqa_ratio}转换为 Q head 索引")
+    logger.log(f"  - 预期结果：剪掉2个KV heads → 自动剪掉8个Q heads → 保持4:1比例")
 
     kwargs = {
         "importance": imp,
@@ -422,11 +415,11 @@ def main():
             LlamaRMSNorm: llama_pruner.hf_rmsnorm_pruner,
         },
         "root_module_types": None,
-        "root_instances": root_instances  # ⭐ GQA感知：q/k/v_proj + gate_proj
+        "root_instances": root_instances  # ⭐ 只有 k_proj 和 gate_proj（与llama3.py一致）
     }
 
     logger.log(f"实际剪枝 Attention 和 MLP 的层: {actual_pruning_layers}")
-    logger.log(f"root_instances 数量: {len(root_instances)} (每层4个模块: q_proj + k_proj + v_proj + gate_proj)")
+    logger.log(f"root_instances 数量: {len(root_instances)} (每层2个模块: k_proj + gate_proj)")
 
     # 创建剪枝器
     pruner = tp.pruner.MetaPruner(model, forward_prompts, **kwargs)
