@@ -75,8 +75,18 @@ def test_single_layer_pruning(args):
 
     # 4. 记录原始配置
     layer = model.model.layers[args.layer_idx]
-    original_q_heads = layer.self_attn.num_heads
-    original_kv_heads = layer.self_attn.num_key_value_heads
+
+    # 从config获取配置，如果layer没有这些属性的话
+    if hasattr(layer.self_attn, 'num_heads'):
+        original_q_heads = layer.self_attn.num_heads
+        original_kv_heads = layer.self_attn.num_key_value_heads
+    else:
+        # 从model config或权重形状推断
+        head_dim = 128
+        q_channels = layer.self_attn.q_proj.weight.shape[0]
+        kv_channels = layer.self_attn.k_proj.weight.shape[0]
+        original_q_heads = q_channels // head_dim
+        original_kv_heads = kv_channels // head_dim
 
     print(f"\n4. Layer {args.layer_idx} 原始配置:")
     print(f"   Q heads: {original_q_heads}")

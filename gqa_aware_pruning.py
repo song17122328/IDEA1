@@ -150,15 +150,25 @@ def prune_attention_by_gqa_groups(layer, keep_kv_indices, head_dim=128, gqa_rati
     layer.self_attn.o_proj.weight.data = layer.self_attn.o_proj.weight.data[:, keep_q_channels]
 
     # 4. 更新配置
+    # 注意：不同版本的transformers可能有不同的属性名称
+    # 无论这些属性是否存在，我们都设置它们（创建或更新）
     layer.self_attn.num_heads = len(keep_q_indices)
     layer.self_attn.num_key_value_heads = len(keep_kv_indices)
     layer.self_attn.num_key_value_groups = gqa_ratio
 
     # 5. 同步Linear层属性（避免LoRA维度不匹配）
+    # 这些属性是nn.Linear固有的，必须更新
     layer.self_attn.q_proj.out_features = len(keep_q_channels)
+    layer.self_attn.q_proj.in_features = layer.self_attn.q_proj.weight.shape[1]
+
     layer.self_attn.k_proj.out_features = len(keep_kv_channels)
+    layer.self_attn.k_proj.in_features = layer.self_attn.k_proj.weight.shape[1]
+
     layer.self_attn.v_proj.out_features = len(keep_kv_channels)
+    layer.self_attn.v_proj.in_features = layer.self_attn.v_proj.weight.shape[1]
+
     layer.self_attn.o_proj.in_features = len(keep_q_channels)
+    layer.self_attn.o_proj.out_features = layer.self_attn.o_proj.weight.shape[0]
 
     return len(keep_q_indices), len(keep_kv_indices)
 
