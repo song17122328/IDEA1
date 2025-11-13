@@ -296,7 +296,8 @@ class UnbalancedStructuredPruningCalculator:
 
 def create_ch_sparsity_dict_for_llama(model, layer_pruning_rates: Dict[int, float],
                                       prune_attention: bool = True,
-                                      prune_mlp: bool = True) -> Dict:
+                                      prune_mlp: bool = True,
+                                      gqa_aware: bool = True) -> Dict:
     """
     为 Llama 模型创建 ch_sparsity_dict
 
@@ -305,6 +306,7 @@ def create_ch_sparsity_dict_for_llama(model, layer_pruning_rates: Dict[int, floa
         layer_pruning_rates: 每层的剪枝率
         prune_attention: 是否剪枝 Attention 模块
         prune_mlp: 是否剪枝 MLP 模块
+        gqa_aware: 是否启用GQA感知模式（同时设置q_proj和k_proj为root）
 
     Returns:
         ch_sparsity_dict: 模块级别的剪枝率字典
@@ -316,9 +318,17 @@ def create_ch_sparsity_dict_for_llama(model, layer_pruning_rates: Dict[int, floa
 
         # Attention 模块
         if prune_attention and hasattr(layer, 'self_attn'):
-            # 只为 k_proj 设置剪枝率（作为 root module）
-            # q_proj 通过依赖图传播自动剪枝，channel_groups 确保其按 512 通道分组
-            ch_sparsity_dict[layer.self_attn.k_proj] = pruning_rate
+            if gqa_aware:
+                # GQA感知模式：同时设置q_proj和k_proj为root modules
+                # 这样它们会独立剪枝，不依赖依赖图传播
+                # q_proj和k_proj会根据各自的重要性得分剪枝相同比例的heads
+                ch_sparsity_dict[layer.self_attn.q_proj] = pruning_rate
+                ch_sparsity_dict[layer.self_attn.k_proj] = pruning_rate
+                ch_sparsity_dict[layer.self_attn.v_proj] = pruning_rate
+            else:
+                # 传统模式：只为 k_proj 设置剪枝率（作为 root module）
+                # q_proj 通过依赖图传播自动剪枝
+                ch_sparsity_dict[layer.self_attn.k_proj] = pruning_rate
 
         # MLP 模块
         if prune_mlp and hasattr(layer, 'mlp'):
