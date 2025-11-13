@@ -2,7 +2,7 @@
 # 微调剪枝后的 Llama-3-8B 模型 V2 - 包含 Attention 层的 LoRA
 
 # 配置
-PRUNE_MODEL="prune_log/llama_unbalanced_prune_v2/pytorch_model.bin"
+PRUNE_MODEL="prune_log/llama_unbalanced_prune_v2/pytorch_model.bin"  # 剪枝脚本的输出路径
 OUTPUT_DIR="./finetuned_llama3_v2"
 GPU_ID=6
 

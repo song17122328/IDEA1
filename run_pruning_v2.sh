@@ -3,7 +3,7 @@
 
 # 配置
 BASE_MODEL="/data/home/yuanxiaosong/Meta-Llama-3-8B-Instruct"
-OUTPUT_DIR="prune_log/llama_unbalanced_prune_v2"
+OUTPUT_NAME="llama_unbalanced_prune_v2"  # Logger 会自动添加 prune_log/ 前缀
 DEVICE="cuda:6"
 
 # 剪枝参数（与之前相同）
@@ -15,7 +15,7 @@ echo "=================================="
 echo "重新剪枝 Llama-3-8B"
 echo "=================================="
 echo "基础模型: $BASE_MODEL"
-echo "输出目录: $OUTPUT_DIR"
+echo "输出名称: $OUTPUT_NAME"
 echo "剪枝比例: $PRUNING_RATIO"
 echo "最小剪枝率: $MIN_PRUNING_RATE"
 echo "最大剪枝率: $MAX_PRUNING_RATE"
@@ -26,12 +26,12 @@ python llama3_unbalanced_pruning.py \
     --pruning_ratio $PRUNING_RATIO \
     --device $DEVICE \
     --save_model \
-    --save_ckpt_log_name $OUTPUT_DIR \
+    --save_ckpt_log_name $OUTPUT_NAME \
     --min_pruning_rate $MIN_PRUNING_RATE \
     --max_pruning_rate $MAX_PRUNING_RATE \
     --test_after_train
 
 echo "=================================="
 echo "剪枝完成！"
-echo "模型保存在: $OUTPUT_DIR/pytorch_model.bin"
+echo "模型保存在: prune_log/$OUTPUT_NAME/pytorch_model.bin"
 echo "=================================="
