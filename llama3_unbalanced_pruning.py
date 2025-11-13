@@ -275,6 +275,72 @@ def main():
     actual_pruning_layers = sorted(effective_pruning_rates.keys())
     logger.log(f"实际参与剪枝的层: {actual_pruning_layers}")
 
+    # ==================== 步骤3.5: 提前调整 head 数量以满足 GQA 约束 ====================
+    logger.log("=" * 80)
+    logger.log("步骤3.5: 提前调整 head 数量以满足 GQA 约束")
+    logger.log("=" * 80)
+
+    # 获取原始配置
+    original_num_heads = model.config.num_attention_heads  # 32
+    original_num_kv_heads = model.config.num_key_value_heads  # 8
+    head_dim = 128
+
+    logger.log(f"原始配置: {original_num_heads} Q heads, {original_num_kv_heads} KV heads")
+    logger.log(f"\n提前计算每层剪枝后的 head 数量:")
+    logger.log(f"{'Layer':<10} {'剪枝率':<12} {'原始Q':<10} {'目标Q':<10} {'调整Q':<10} {'原始KV':<10} {'目标KV':<10} {'调整KV':<10} {'比例':<10} {'实际剪枝率':<12}")
+    logger.log("-" * 130)
+
+    adjusted_pruning_rates = {}
+
+    for layer_idx in actual_pruning_layers:
+        pruning_rate = effective_pruning_rates[layer_idx]
+
+        # 计算目标 head 数量（根据剪枝率）
+        target_q_heads = int(original_num_heads * (1 - pruning_rate))
+        target_kv_heads = int(original_num_kv_heads * (1 - pruning_rate))
+
+        # 调整 KV heads（确保至少有1个）
+        adjusted_kv_heads = max(1, target_kv_heads)
+
+        # 调整 Q heads 确保是 KV heads 的整数倍
+        if target_q_heads < adjusted_kv_heads:
+            adjusted_q_heads = adjusted_kv_heads
+        else:
+            # 找到最接近的整数倍
+            ratio = round(target_q_heads / adjusted_kv_heads)
+            ratio = max(1, ratio)  # 至少是 1:1
+            adjusted_q_heads = ratio * adjusted_kv_heads
+
+        # 反向计算实际的剪枝率
+        actual_q_pruning_rate = 1 - (adjusted_q_heads / original_num_heads)
+        actual_kv_pruning_rate = 1 - (adjusted_kv_heads / original_num_kv_heads)
+
+        # 使用 Q heads 的剪枝率作为整体剪枝率（因为 Q 影响更大）
+        actual_pruning_rate = actual_q_pruning_rate
+        adjusted_pruning_rates[layer_idx] = actual_pruning_rate
+
+        gqa_ratio = adjusted_q_heads // adjusted_kv_heads
+
+        logger.log(f"Layer {layer_idx:<5} {pruning_rate:<12.4f} "
+                  f"{original_num_heads:<10} {target_q_heads:<10} {adjusted_q_heads:<10} "
+                  f"{original_num_kv_heads:<10} {target_kv_heads:<10} {adjusted_kv_heads:<10} "
+                  f"{gqa_ratio}:1{'':<7} {actual_pruning_rate:<12.4f}")
+
+    # 更新 effective_pruning_rates 为调整后的值
+    effective_pruning_rates = adjusted_pruning_rates
+
+    # 重新创建 ch_sparsity_dict
+    ch_sparsity_dict = create_ch_sparsity_dict_for_llama(
+        model,
+        effective_pruning_rates,
+        prune_attention=True,
+        prune_mlp=True
+    )
+
+    logger.log(f"\n✅ head 数量已提前调整，确保满足 GQA 约束")
+    logger.log(f"   所有层的 Q heads 都是 KV heads 的整数倍")
+    logger.log("=" * 80)
+
     # ==================== 步骤4: 执行结构化剪枝 ====================
     logger.log("=" * 80)
     logger.log("步骤4: 执行结构化剪枝")
@@ -384,29 +450,11 @@ def main():
             num_heads = q_out_channels // head_dim
             num_kv_heads = k_out_channels // head_dim
 
-            # 验证并修正 GQA 比例
+            # 验证 GQA 比例（应该已经在步骤3.5中提前调整好了）
             if num_heads % num_kv_heads != 0:
-                logger.log(f"警告: Layer {layer_idx}: num_heads {num_heads} 不能被 num_kv_heads {num_kv_heads} 整除")
-
-                # 自动修正到最接近的有效比例
-                adjusted_num_heads = (num_heads // num_kv_heads) * num_kv_heads
-                if adjusted_num_heads > 0 and adjusted_num_heads != num_heads:
-                    logger.log(f"       自动修正: {num_heads} -> {adjusted_num_heads} (比例 {adjusted_num_heads}:{num_kv_heads})")
-
-                    # 修剪 q_proj 权重和偏置
-                    adjusted_q_channels = adjusted_num_heads * head_dim
-                    layer.self_attn.q_proj.weight.data = layer.self_attn.q_proj.weight.data[:adjusted_q_channels, :]
-                    if layer.self_attn.q_proj.bias is not None:
-                        layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[:adjusted_q_channels]
-
-                    # 修剪 o_proj 的输入维度（因为它接收 q_proj 的输出）
-                    layer.self_attn.o_proj.weight.data = layer.self_attn.o_proj.weight.data[:, :adjusted_q_channels]
-
-                    # 更新 num_heads
-                    num_heads = adjusted_num_heads
-                    q_out_channels = adjusted_q_channels
-
-                    logger.log(f"       修正完成: q_proj {q_out_channels}通道, o_proj输入 {adjusted_q_channels}通道")
+                logger.log(f"❌ 错误: Layer {layer_idx}: num_heads {num_heads} 不能被 num_kv_heads {num_kv_heads} 整除")
+                logger.log(f"   这不应该发生！步骤3.5的提前调整可能有bug")
+                raise ValueError(f"Layer {layer_idx} GQA比例不正确: {num_heads}:{num_kv_heads}")
 
             layer.self_attn.num_heads = num_heads
             layer.self_attn.num_key_value_heads = num_kv_heads
