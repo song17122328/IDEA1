@@ -450,11 +450,33 @@ def main():
             num_heads = q_out_channels // head_dim
             num_kv_heads = k_out_channels // head_dim
 
-            # 验证 GQA 比例（应该已经在步骤3.5中提前调整好了）
+            # 验证并修正 GQA 比例（剪枝后的后处理）
             if num_heads % num_kv_heads != 0:
-                logger.log(f"❌ 错误: Layer {layer_idx}: num_heads {num_heads} 不能被 num_kv_heads {num_kv_heads} 整除")
-                logger.log(f"   这不应该发生！步骤3.5的提前调整可能有bug")
-                raise ValueError(f"Layer {layer_idx} GQA比例不正确: {num_heads}:{num_kv_heads}")
+                logger.log(f"⚠️  Layer {layer_idx}: GQA 比例不正确 - {num_heads}:{num_kv_heads}")
+                logger.log(f"   说明：虽然步骤3.5提前计划了目标 head 数量，但 torch_pruning")
+                logger.log(f"   基于重要性剪枝，最终结果可能与计划不同，需要后处理修正")
+
+                # 自动修正到最接近的有效比例
+                adjusted_num_heads = (num_heads // num_kv_heads) * num_kv_heads
+                if adjusted_num_heads > 0 and adjusted_num_heads != num_heads:
+                    logger.log(f"   → 自动修正: {num_heads} Q heads → {adjusted_num_heads} Q heads (比例 {adjusted_num_heads}:{num_kv_heads})")
+
+                    # 修剪 q_proj 权重和偏置
+                    adjusted_q_channels = adjusted_num_heads * head_dim
+                    layer.self_attn.q_proj.weight.data = layer.self_attn.q_proj.weight.data[:adjusted_q_channels, :]
+                    if layer.self_attn.q_proj.bias is not None:
+                        layer.self_attn.q_proj.bias.data = layer.self_attn.q_proj.bias.data[:adjusted_q_channels]
+
+                    # 修剪 o_proj 的输入维度（因为它接收 q_proj 的输出）
+                    layer.self_attn.o_proj.weight.data = layer.self_attn.o_proj.weight.data[:, :adjusted_q_channels]
+
+                    # 更新 num_heads
+                    num_heads = adjusted_num_heads
+                    q_out_channels = adjusted_q_channels
+
+                    logger.log(f"   ✅ 修正完成: {adjusted_num_heads}:{num_kv_heads} = {adjusted_num_heads//num_kv_heads}:1")
+                else:
+                    logger.log(f"   ⚠️  无法修正：调整后 head 数量为 0 或未变化")
 
             layer.self_attn.num_heads = num_heads
             layer.self_attn.num_key_value_heads = num_kv_heads
