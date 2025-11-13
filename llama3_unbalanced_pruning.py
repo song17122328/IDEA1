@@ -86,11 +86,11 @@ def main():
     # 剪枝范围（默认剪枝所有层）
     parser.add_argument('--block_attention_layer_start', type=int, default=0,
                        help='Attention 剪枝起始层')
-    parser.add_argument('--block_attention_layer_end', type=int, default=31,
+    parser.add_argument('--block_attention_layer_end', type=int, default=32,
                        help='Attention 剪枝结束层')
     parser.add_argument('--block_mlp_layer_start', type=int, default=0,
                        help='MLP 剪枝起始层')
-    parser.add_argument('--block_mlp_layer_end', type=int, default=31,
+    parser.add_argument('--block_mlp_layer_end', type=int, default=32,
                        help='MLP 剪枝结束层')
 
     # 其他参数
@@ -488,7 +488,7 @@ def main():
             layer.self_attn.num_key_value_heads = actual_kv_heads
             layer.self_attn.num_key_value_groups = actual_q_heads // actual_kv_heads
 
-            logger.log(f"  Layer {i}: {actual_q_heads} Q heads, {actual_kv_heads} KV heads, ratio {actual_q_heads//actual_kv_heads}:1")
+            logger.log(f"  Layer {i}: {actual_q_heads} Q heads, {actual_kv_heads} KV heads, ratio {actual_q_heads/actual_kv_heads:1f}:1")
 
         logger.log("✅ 配置检查完成\n")
 

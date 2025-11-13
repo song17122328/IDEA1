@@ -2,9 +2,8 @@
 # 重新剪枝 Llama-3-8B（使用改进后的脚本，支持 Attention 层 LoRA）
 
 # 配置
-BASE_MODEL="/data/home/yuanxiaosong/Meta-Llama-3-8B-Instruct"
+BASE_MODEL="/newdata/LLMs/Llama-3-8B-Instruct"
 OUTPUT_NAME="llama_unbalanced_prune_v2"  # Logger 会自动添加 prune_log/ 前缀
-DEVICE="cuda:6"
 
 # 剪枝参数（与之前相同）
 PRUNING_RATIO=0.25
@@ -24,7 +23,6 @@ echo "=================================="
 python llama3_unbalanced_pruning.py \
     --base_model $BASE_MODEL \
     --pruning_ratio $PRUNING_RATIO \
-    --device $DEVICE \
     --save_model \
     --save_ckpt_log_name $OUTPUT_NAME \
     --min_pruning_rate $MIN_PRUNING_RATE \
