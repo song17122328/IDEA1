@@ -165,12 +165,52 @@ def main(args):
                 loss.backward()
 
             # 1. Consecutive for grouped KV
-            # 2. 
+            # 2.
             pruner.step()
 
             after_pruning_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
             logger.log("After Iter {}/{}, #parameters: {}".format(i+1, args.iterative_steps, after_pruning_parameters))
-        
+
+            # 添加详细的剪枝后GQA比例验证日志
+            logger.log("\n" + "=" * 80)
+            logger.log("剪枝后各层的 Q/KV head 数量验证")
+            logger.log("=" * 80)
+            logger.log(f"{'Layer':<10} {'Q_channels':<15} {'KV_channels':<15} {'Q_heads':<10} {'KV_heads':<10} {'Ratio':<10} {'Status'}")
+            logger.log("-" * 80)
+
+            head_dim = model.model.layers[0].self_attn.head_dim  # 128
+            gqa_mismatch_count = 0
+
+            for layer_idx, layer in enumerate(model.model.layers):
+                q_channels = layer.self_attn.q_proj.weight.data.shape[0]
+                kv_channels = layer.self_attn.k_proj.weight.data.shape[0]
+
+                num_q_heads = q_channels // head_dim
+                num_kv_heads = kv_channels // head_dim
+
+                if num_kv_heads > 0:
+                    ratio = num_q_heads / num_kv_heads
+                    ratio_str = f"{num_q_heads}:{num_kv_heads}"
+                else:
+                    ratio = 0
+                    ratio_str = "N/A"
+
+                # 检查是否满足整数倍关系
+                if num_kv_heads > 0 and num_q_heads % num_kv_heads == 0:
+                    status = "✓"
+                else:
+                    status = "✗ 不满足整数倍"
+                    gqa_mismatch_count += 1
+
+                logger.log(f"Layer {layer_idx:<5} {q_channels:<15} {kv_channels:<15} {num_q_heads:<10} {num_kv_heads:<10} {ratio_str:<10} {status}")
+
+            logger.log("-" * 80)
+            if gqa_mismatch_count == 0:
+                logger.log(f"✅ 所有层的 GQA 比例都正确（Q heads 是 KV heads 的整数倍）")
+            else:
+                logger.log(f"⚠️  发现 {gqa_mismatch_count} 层的 GQA 比例不正确")
+            logger.log("=" * 80 + "\n")
+
             # modify inferece-related attributes
             for layer in model.model.layers:
                 layer.self_attn.num_heads = layer.self_attn.q_proj.weight.data.shape[0] // layer.self_attn.head_dim
