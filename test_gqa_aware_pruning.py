@@ -51,7 +51,7 @@ def test_single_layer_pruning(args):
 
     # 1. 加载模型
     print("\n1. 加载模型...")
-    model_path = "meta-llama/Meta-Llama-3-8B-Instruct"
+    model_path = "/newdata/LLMs/Llama-3-8B-Instruct"
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch.float16,
