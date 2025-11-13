@@ -1,7 +1,9 @@
 #!/bin/bash
 
-# Llama-3-8B GQA-Aware非均衡剪枝脚本
-# 使用GQA-aware Taylor importance方法，确保剪枝后PPL几乎无损
+# Llama-3-8B GQA-Aware非均衡剪枝脚本 (v3)
+# - Attention: GQA-aware Taylor importance
+# - MLP: Taylor importance (综合gate/up/down三个投影)
+# - 完全手动控制，不依赖torch_pruning
 
 MODEL_PATH="/newdata/LLMs/Llama-3-8B-Instruct"
 SAVE_NAME="llama3_gqa_aware_pruned_v3"

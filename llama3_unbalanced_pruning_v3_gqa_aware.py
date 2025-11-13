@@ -5,12 +5,13 @@ Llama-3 非均衡结构化剪枝脚本 (v3 - GQA-Aware版本)
 核心改进：
 1. 保留层重要性评估和per-layer剪枝率计算
 2. Attention使用GQA-aware Taylor importance剪枝
-3. 不依赖torch_pruning，完全手动控制剪枝过程
-4. 确保4:1 GQA比例自然保持，基于importance选择GQA组
+3. MLP也使用Taylor importance剪枝（综合gate/up/down三个投影）
+4. 不依赖torch_pruning，完全手动控制剪枝过程
+5. 确保4:1 GQA比例自然保持，基于importance选择GQA组
 
 与v2的主要区别：
 - v2: torch_pruning + 后处理简单截断 → PPL 71万
-- v3: GQA-aware组级剪枝 → PPL 几乎无损
+- v3: GQA-aware组级剪枝 + MLP Taylor importance → PPL显著改善
 """
 
 import os
@@ -54,54 +55,6 @@ def load_evaluation_data(tokenizer, num_samples=100):
             texts.append(text)
 
     return texts[:num_samples]
-
-
-def prune_mlp_by_magnitude(layer, pruning_rate, head_dim=128):
-    """
-    使用magnitude方法剪枝MLP（简化版本）
-
-    Args:
-        layer: Transformer层
-        pruning_rate: 剪枝率
-        head_dim: 用于分组（确保剪枝整数倍的通道）
-
-    Returns:
-        剪枝后的通道数
-    """
-    # 计算gate_proj的magnitude
-    gate_weight = layer.mlp.gate_proj.weight.data
-    channel_magnitude = gate_weight.abs().sum(dim=1)  # [num_channels]
-
-    # 计算要保留的通道数
-    num_channels = channel_magnitude.shape[0]
-    num_channels_to_prune = int(num_channels * pruning_rate)
-    # 确保是head_dim的倍数
-    num_channels_to_prune = (num_channels_to_prune // head_dim) * head_dim
-    target_channels = num_channels - num_channels_to_prune
-    target_channels = max(head_dim, target_channels)  # 至少保留1组
-
-    # 选择magnitude最高的通道
-    _, sorted_indices = torch.sort(channel_magnitude, descending=True)
-    keep_indices = sorted(sorted_indices[:target_channels].tolist())
-
-    # 剪枝gate_proj和up_proj（并联）
-    layer.mlp.gate_proj.weight.data = layer.mlp.gate_proj.weight.data[keep_indices, :]
-    layer.mlp.up_proj.weight.data = layer.mlp.up_proj.weight.data[keep_indices, :]
-
-    if layer.mlp.gate_proj.bias is not None:
-        layer.mlp.gate_proj.bias.data = layer.mlp.gate_proj.bias.data[keep_indices]
-    if layer.mlp.up_proj.bias is not None:
-        layer.mlp.up_proj.bias.data = layer.mlp.up_proj.bias.data[keep_indices]
-
-    # 剪枝down_proj（输入维度）
-    layer.mlp.down_proj.weight.data = layer.mlp.down_proj.weight.data[:, keep_indices]
-
-    # 更新Linear层属性
-    layer.mlp.gate_proj.out_features = target_channels
-    layer.mlp.up_proj.out_features = target_channels
-    layer.mlp.down_proj.in_features = target_channels
-
-    return target_channels
 
 
 def main():
@@ -319,18 +272,31 @@ def main():
             for param in model.model.layers[pruned_idx].parameters():
                 param.requires_grad = False
 
-        # ===== Attention剪枝 (GQA-aware) =====
-        logger.log("\n1. Attention剪枝（GQA-aware）...")
+        # ===== 步骤1: 计算梯度 =====
+        logger.log("\n1. 计算梯度（用于Taylor importance）...")
 
-        # 计算梯度
         model.zero_grad()
         loss = model(example_prompts, labels=example_prompts).loss
         logger.log(f"   Loss: {loss.item():.4f}")
         loss.backward()
 
-        # 计算GQA组的importance
+        # ===== 步骤2: 计算importance (Attention + MLP) =====
+        logger.log("\n2. 计算importance...")
+
+        # Attention: GQA组的importance
         group_imp = compute_gqa_group_importance(layer, args.head_dim, args.gqa_ratio)
-        logger.log(f"   GQA组importance: {group_imp.detach().cpu().numpy()}")
+        logger.log(f"   Attention GQA组importance: {group_imp.detach().cpu().numpy()}")
+
+        # MLP: Taylor importance (如果需要剪枝)
+        if args.prune_mlp:
+            gate_salience = (layer.mlp.gate_proj.weight * layer.mlp.gate_proj.weight.grad).abs().sum(1)
+            up_salience = (layer.mlp.up_proj.weight * layer.mlp.up_proj.weight.grad).abs().sum(1)
+            down_salience = (layer.mlp.down_proj.weight * layer.mlp.down_proj.weight.grad).abs().sum(0)
+            mlp_importance = gate_salience + up_salience + down_salience
+            logger.log(f"   MLP通道importance统计: mean={mlp_importance.mean().item():.4f}, std={mlp_importance.std().item():.4f}")
+
+        # ===== 步骤3: 执行Attention剪枝 (GQA-aware) =====
+        logger.log("\n3. Attention剪枝（GQA-aware）...")
 
         # 确定要保留的GQA组数量
         num_kv_heads = len(group_imp)
@@ -347,19 +313,47 @@ def main():
         num_q, num_kv = prune_attention_by_gqa_groups(layer, keep_indices, args.head_dim, args.gqa_ratio)
         logger.log(f"   ✅ Attention剪枝完成: {32}Q:{8}KV → {num_q}Q:{num_kv}KV (比例{num_q//num_kv}:1)")
 
-        # 清理梯度和计算图
+        # ===== 步骤4: 执行MLP剪枝 (Taylor-based, 可选) =====
+        if args.prune_mlp:
+            logger.log("\n4. MLP剪枝（Taylor-based）...")
+
+            # 计算要保留的通道数
+            num_channels = mlp_importance.shape[0]
+            num_channels_to_prune = int(num_channels * rate)
+            num_channels_to_prune = (num_channels_to_prune // args.head_dim) * args.head_dim
+            target_channels = num_channels - num_channels_to_prune
+            target_channels = max(args.head_dim, target_channels)
+
+            # 选择importance最高的通道
+            _, sorted_indices = torch.sort(mlp_importance, descending=True)
+            keep_indices_mlp = sorted(sorted_indices[:target_channels].tolist())
+
+            # 剪枝gate_proj和up_proj（并联）
+            layer.mlp.gate_proj.weight.data = layer.mlp.gate_proj.weight.data[keep_indices_mlp, :]
+            layer.mlp.up_proj.weight.data = layer.mlp.up_proj.weight.data[keep_indices_mlp, :]
+
+            if layer.mlp.gate_proj.bias is not None:
+                layer.mlp.gate_proj.bias.data = layer.mlp.gate_proj.bias.data[keep_indices_mlp]
+            if layer.mlp.up_proj.bias is not None:
+                layer.mlp.up_proj.bias.data = layer.mlp.up_proj.bias.data[keep_indices_mlp]
+
+            # 剪枝down_proj（输入维度）
+            layer.mlp.down_proj.weight.data = layer.mlp.down_proj.weight.data[:, keep_indices_mlp]
+
+            # 更新Linear层属性
+            layer.mlp.gate_proj.out_features = target_channels
+            layer.mlp.up_proj.out_features = target_channels
+            layer.mlp.down_proj.in_features = target_channels
+
+            logger.log(f"   ✅ MLP剪枝完成: {num_channels} → {target_channels}通道 (保留{target_channels/num_channels:.1%})")
+
+        # ===== 步骤5: 清理梯度和计算图 =====
         del loss
         model.zero_grad()
         for param in layer.parameters():
             if param.grad is not None:
                 param.grad = None
         torch.cuda.empty_cache()
-
-        # ===== MLP剪枝 (可选) =====
-        if args.prune_mlp:
-            logger.log("\n2. MLP剪枝（Magnitude-based）...")
-            mlp_channels = prune_mlp_by_magnitude(layer, rate, head_dim=args.head_dim)
-            logger.log(f"   ✅ MLP剪枝完成: 保留{mlp_channels}通道")
 
         # 记录已剪枝的层
         pruned_layer_indices.append(layer_idx)
