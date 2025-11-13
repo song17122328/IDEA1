@@ -39,17 +39,26 @@ def main():
     merged_model = model_with_lora.merge_and_unload()
     print("✅ 权重合并完成")
 
-    # 3. 保存合并后的模型
+    # 3. 保存合并后的模型 - 使用与剪枝模型相同的格式
     print(f"\n4. 保存合并后的模型到: {args.output_dir}")
     os.makedirs(args.output_dir, exist_ok=True)
 
-    merged_model.save_pretrained(args.output_dir)
-    tokenizer.save_pretrained(args.output_dir)
+    # 保存为 pytorch_model.bin（与原始剪枝模型格式相同）
+    output_file = os.path.join(args.output_dir, 'pytorch_model.bin')
 
-    print(f"✅ 完整模型已保存到: {args.output_dir}")
+    # 将模型移到 CPU 以避免设备不匹配问题
+    merged_model.cpu()
+
+    torch.save({
+        'model': merged_model,
+        'tokenizer': tokenizer
+    }, output_file, pickle_protocol=4)
+
+    print(f"✅ 完整模型已保存到: {output_file}")
+    print("   格式: PyTorch 原生格式（与剪枝模型相同）")
     print("=" * 80)
-    print("\n现在可以使用 evaluate_finetuned.py 评估模型了")
-    print(f"命令: python evaluate_finetuned.py --model_path {os.path.dirname(args.output_dir)} --device cuda:0")
+    print("\n现在可以评估模型了")
+    print(f"命令: python evaluate_finetuned.py --model_path {args.output_dir} --device cuda:0")
     print("=" * 80)
 
 if __name__ == "__main__":
