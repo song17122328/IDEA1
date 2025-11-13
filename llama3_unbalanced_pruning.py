@@ -321,19 +321,13 @@ def main():
 
     logger.log(f"使用 {args.pruner_type} 剪枝器...")
 
-    # ==================== 新方案：手动控制 GQA 剪枝 ====================
-    # 策略：让 q_proj 和 o_proj 不参与自动依赖图，手动剪枝以确保4:1比例
-    # 原因：torch_pruning的依赖图是"通道对通道"传播，无法理解GQA的4:1结构
-    #
-    # 步骤：
-    # 1. pruner 只管理 k_proj, v_proj, 和 MLP（不包括 q_proj, o_proj）
-    # 2. 每次 pruner.step() 后，手动剪枝 q_proj（确保是 k_proj 的4倍）
-    # 3. 同时手动调整 o_proj 输入维度（匹配 q_proj 输出）
-    # 4. 这样所有模块从始至终保持一致的维度，LoRA 不会遇到配置冲突
-
+    # 只为实际参与剪枝的层创建 root_instances
+    # 关键：只让 k_proj 作为 root，让依赖图自动传播到 q_proj
+    # torch_pruning的依赖图是"通道对通道"传播，不理解GQA的4:1结构
+    # 因此需要在每次 pruner.step() 后立即修正 GQA 比例
     root_instances = []
     for layer_idx in actual_pruning_layers:
-        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # KV attention
+        root_instances.append(model.model.layers[layer_idx].self_attn.k_proj)  # 只有 k_proj
         root_instances.append(model.model.layers[layer_idx].mlp.gate_proj)     # MLP
 
     # 获取 GQA 配置
@@ -342,31 +336,25 @@ def main():
     head_dim = 128
     gqa_ratio = num_heads // num_key_value_heads  # 4
 
-    # 配置 consecutive_groups：让 k_proj 按 head 级别剪枝
+    # 配置 consecutive_groups 用于 head-level 剪枝
+    # 关键：只为 k_proj 设置 consecutive_groups，不设置 q_proj
+    # 这样 k_proj 会按 head 级别剪枝，q_proj 通过依赖图接收通道级别的索引
     consecutive_groups = {}
-    for layer in model.model.layers:
-        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 1个KV head = 128通道
-
-    # 关键：将 q_proj 和 o_proj 加入 ignored_layers，不让它们参与自动剪枝
-    # 我们会手动控制它们的剪枝
-    ignored_layers = []
-    for layer in model.model.layers:
-        ignored_layers.append(layer.self_attn.q_proj)
-        ignored_layers.append(layer.self_attn.o_proj)
+    for layer in model.model.layers:  # 所有层 0-31
+        consecutive_groups[layer.self_attn.k_proj] = head_dim  # 128 (1个KV head)
 
     logger.log("=" * 80)
-    logger.log("🔧 新的 GQA-aware 剪枝策略")
+    logger.log("GQA-aware 剪枝策略（让q_proj参与依赖图，但在step后立即修正）")
     logger.log("=" * 80)
     logger.log(f"GQA 配置: Q heads={num_heads}, KV heads={num_key_value_heads}, 比例={gqa_ratio}:1")
     logger.log(f"\n剪枝配置:")
-    logger.log(f"  - root_instances: k_proj 和 gate_proj")
-    logger.log(f"  - consecutive_groups: k_proj (128通道/head)")
-    logger.log(f"  - ignored_layers: q_proj 和 o_proj（手动控制以确保4:1比例）")
-    logger.log(f"\n工作流程:")
-    logger.log(f"  1. pruner.step() 剪枝 k_proj 和 MLP")
-    logger.log(f"  2. 手动剪枝 q_proj（确保 Q heads = KV heads × 4）")
-    logger.log(f"  3. 手动调整 o_proj 输入维度（匹配 q_proj 输出）")
-    logger.log(f"  4. 所有模块维度一致，无需后处理")
+    logger.log(f"  - root_instances: 仅 k_proj 和 gate_proj")
+    logger.log(f"  - consecutive_groups: 仅 k_proj (128通道/head)")
+    logger.log(f"  - q_proj 通过依赖图自动从 k_proj 接收剪枝索引")
+    logger.log(f"\n⚠️  torch_pruning 的依赖图传播是'通道对通道'的，不理解 GQA 的 4:1 结构")
+    logger.log(f"   示例：剪掉 2 个 KV heads → 依赖图传播相同通道数 → 剪掉 2 个 Q heads")
+    logger.log(f"   结果：30:6 (5:1) ✗ 而不是 24:6 (4:1) ✓")
+    logger.log(f"\n✅ 解决方案：每次 pruner.step() 后立即修正 GQA 比例为 4:1")
     logger.log("=" * 80 + "\n")
 
     kwargs = {
@@ -375,7 +363,7 @@ def main():
         "iterative_steps": args.iterative_steps,
         "ch_sparsity": args.pruning_ratio,  # 默认剪枝率（不应该被使用）
         "ch_sparsity_dict": ch_sparsity_dict,  # ⭐ 每层的剪枝率
-        "ignored_layers": ignored_layers,  # ⭐ 忽略 q_proj 和 o_proj，我们会手动处理
+        "ignored_layers": [],  # 让所有模块正常参与依赖图
         "channel_groups": {},  # ⭐ 空字典，与原始 llama3.py 一致
         "consecutive_groups": consecutive_groups,  # ⭐ 强制 k_proj 按 128 通道分组
         "customized_pruners": {
@@ -483,21 +471,40 @@ def main():
         logger.log("=" * 80)
 
         # 保存前最终配置确认和修正（确保所有配置正确，避免 LoRA 维度不匹配）
-        logger.log("\n保存前最终配置检查...")
+        logger.log("\n保存前最终配置检查和Linear层同步...")
+        logger.log("⚠️  关键修复：手动同步Linear层的out_features/in_features属性")
+        logger.log("   原因：手动修改权重形状后，nn.Linear的属性不会自动更新")
+        logger.log("   影响：LoRA会读取Linear层的out_features，导致维度不匹配\n")
+
         head_dim = 128
         for i, layer in enumerate(model.model.layers):
-            # 从实际权重推断配置
-            actual_q_heads = layer.self_attn.q_proj.weight.shape[0] // head_dim
-            actual_kv_heads = layer.self_attn.k_proj.weight.shape[0] // head_dim
+            # 1. 从实际权重推断配置
+            actual_q_out = layer.self_attn.q_proj.weight.shape[0]
+            actual_q_in = layer.self_attn.q_proj.weight.shape[1]
+            actual_k_out = layer.self_attn.k_proj.weight.shape[0]
+            actual_o_in = layer.self_attn.o_proj.weight.shape[1]
 
-            # 强制更新所有相关配置
+            actual_q_heads = actual_q_out // head_dim
+            actual_kv_heads = actual_k_out // head_dim
+
+            # 2. 强制同步 Linear 层的维度属性（关键修复）
+            # 当我们手动截断q_proj权重时，nn.Linear的out_features不会自动更新
+            # 这会导致LoRA读取到错误的维度信息
+            layer.self_attn.q_proj.out_features = actual_q_out
+            layer.self_attn.q_proj.in_features = actual_q_in
+            layer.self_attn.o_proj.in_features = actual_o_in  # o_proj的输入维度 = q_proj的输出维度
+
+            # 3. 更新Attention模块的head配置
             layer.self_attn.num_heads = actual_q_heads
             layer.self_attn.num_key_value_heads = actual_kv_heads
             layer.self_attn.num_key_value_groups = actual_q_heads // actual_kv_heads
 
-            logger.log(f"  Layer {i}: {actual_q_heads} Q heads, {actual_kv_heads} KV heads, ratio {actual_q_heads/actual_kv_heads:.1f}:1")
+            logger.log(f"  Layer {i}:")
+            logger.log(f"    q_proj: out_features={actual_q_out}, Q heads={actual_q_heads}")
+            logger.log(f"    k_proj: out_features={actual_k_out}, KV heads={actual_kv_heads}")
+            logger.log(f"    ratio: {actual_q_heads//actual_kv_heads}:1")
 
-        logger.log("✅ 配置检查完成\n")
+        logger.log("\n✅ Linear层属性和Attention配置已同步\n")
 
         model.half()
         torch.save({
