@@ -68,8 +68,49 @@ def load_pruned_model(pruned_path, device):
     return tokenizer, model
 
 
+def load_finetuned_model_from_lora(pruned_path, finetuned_dir, device):
+    """从剪枝模型加载并应用LoRA权重"""
+    from LLMPruner.peft import PeftModel
+
+    # 加载剪枝模型
+    pruned_dict = torch.load(pruned_path, map_location='cpu', weights_only=False)
+    tokenizer = pruned_dict['tokenizer']
+    base_model = pruned_dict['model']
+
+    # 修正配置
+    head_dim = 128
+    print(f"   修正剪枝模型的层配置...")
+    for i, layer in enumerate(base_model.model.layers):
+        layer_q = layer.self_attn.q_proj.weight.shape[0] // head_dim
+        layer_kv = layer.self_attn.k_proj.weight.shape[0] // head_dim
+
+        layer.self_attn.num_heads = layer_q
+        layer.self_attn.num_key_value_heads = layer_kv
+        layer.self_attn.num_key_value_groups = layer_q // layer_kv
+
+    # 移动到设备
+    base_model.to(device)
+    base_model.half()
+
+    # 加载LoRA权重
+    print(f"   加载LoRA权重从: {finetuned_dir}")
+    model = PeftModel.from_pretrained(base_model, finetuned_dir)
+
+    # 合并LoRA权重
+    print(f"   合并LoRA权重...")
+    model = model.merge_and_unload()
+
+    model.eval()
+
+    num_params = sum(p.numel() for p in model.parameters())
+    print(f"✅ 微调模型加载完成（剪枝模型+LoRA）")
+    print(f"   参数量: {num_params:,}")
+
+    return tokenizer, model
+
+
 def load_finetuned_model(pruned_path, finetuned_dir, device):
-    """加载微调后的模型（合并后的完整模型）"""
+    """加载微调后的模型（合并后的完整模型或剪枝模型+LoRA）"""
     print("\n" + "=" * 80)
     print("3. 加载微调模型...")
     print("=" * 80)
@@ -78,35 +119,22 @@ def load_finetuned_model(pruned_path, finetuned_dir, device):
     merged_model_path = os.path.join(finetuned_dir, "merged_model")
 
     if os.path.exists(merged_model_path):
-        print(f"   从合并模型加载: {merged_model_path}")
-        tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
-        model = LlamaForCausalLM.from_pretrained(
-            merged_model_path,
-            device_map=device,
-            torch_dtype=torch.float16,
-        )
+        print(f"   尝试从合并模型加载: {merged_model_path}")
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(merged_model_path)
+            model = LlamaForCausalLM.from_pretrained(
+                merged_model_path,
+                device_map=device,
+                torch_dtype=torch.float16,
+            )
+            print(f"   ✅ 成功从合并模型加载")
+        except Exception as e:
+            print(f"   ⚠️  合并模型加载失败: {e}")
+            print(f"   回退到加载剪枝模型+LoRA权重...")
+            return load_finetuned_model_from_lora(pruned_path, finetuned_dir, device)
     else:
-        print(f"   未找到合并模型，尝试加载LoRA权重...")
-        # 如果没有合并模型，加载剪枝模型+LoRA
-        from LLMPruner.peft import PeftModel
-
-        pruned_dict = torch.load(pruned_path, map_location='cpu', weights_only=False)
-        tokenizer = pruned_dict['tokenizer']
-        base_model = pruned_dict['model']
-
-        # 修正配置
-        head_dim = 128
-        for i, layer in enumerate(base_model.model.layers):
-            layer_q = layer.self_attn.q_proj.weight.shape[0] // head_dim
-            layer_kv = layer.self_attn.k_proj.weight.shape[0] // head_dim
-
-            layer.self_attn.num_heads = layer_q
-            layer.self_attn.num_key_value_heads = layer_kv
-            layer.self_attn.num_key_value_groups = layer_q // layer_kv
-
-        # 加载LoRA
-        model = PeftModel.from_pretrained(base_model, finetuned_dir)
-        model = model.merge_and_unload()
+        print(f"   未找到合并模型，加载剪枝模型+LoRA权重...")
+        return load_finetuned_model_from_lora(pruned_path, finetuned_dir, device)
 
     model.to(device)
     model.half()
